@@ -1,50 +1,155 @@
 package fstesting
 
 import (
+	"bytes"
+	"encoding/gob"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/absfs/absfs"
-	"github.com/pkg/errors"
+	"github.com/fatih/color"
 )
 
-type Testcase struct {
-	TestNo         int         `json:"test_no"`
-	PreCondition   string      `json:"pre_condition"`
-	Op             string      `json:"op"`
-	Path           string      `json:"path"`
-	Flags          int         `json:"flags"`
-	Mode           os.FileMode `json:"mode"`
-	OpenErr        error       `json:"open_err"`
-	OpenErrString  string      `json:"open_err_string"`
-	WriteErr       error       `json:"write_err"`
-	WriteErrString string      `json:"write_err_string"`
-	ReadErr        error       `json:"read_err"`
-	ReadErrString  string      `json:"read_err_string"`
-	CloseErr       error       `json:"close_err"`
-	CloseErrString string      `json:"close_err_string"`
-	log            []string
+var yellow = color.New(color.FgYellow).SprintFunc()
+var red = color.New(color.FgRed).SprintFunc()
+var green = color.New(color.FgGreen).SprintFunc()
+var blue = color.New(color.FgBlue).SprintFunc()
+var magenta = color.New(color.FgMagenta).SprintFunc()
+
+type ErrorReport struct {
+	Op       string
+	Path     string
+	Err      error
+	StackStr string
+	TypeStr  string
+
+	ErrStr string
 }
 
-// Creates a timestamped folder for filesystem testing, and changes directory
-// to it.
-// Returns the path to the new directory, a cleanup function that and and
-// an error.
-// The `cleanup` method changes the directory back to the original location
-// and removes testdir and all of it's contents.
-func OsTestDir(path string) (testdir string, cleanup func(), err error) {
+func (e *ErrorReport) Type() string {
+	return e.TypeStr
+}
+
+func (e *ErrorReport) Error() string {
+	return e.ErrStr
+}
+
+func (e *ErrorReport) Stack() string {
+	return red(e.StackStr)
+}
+
+func (e *ErrorReport) String() string {
+
+	str := e.Error()
+	start := strings.Index(str, "/")
+	if start < 0 {
+		return str
+	}
+	end := strings.LastIndex(str, "/") + 1
+
+	if end == len(str)-1 {
+		return str[:start]
+	}
+	return str[:start] + str[end:]
+}
+
+func (e *ErrorReport) TypesEqual(r *ErrorReport) bool {
+	return e.Type() == r.Type()
+}
+
+func (e *ErrorReport) Equal(r *ErrorReport) bool {
+	return e.String() == r.String()
+}
+
+func NewErrorReport(op, path string, err error, stackstr string) *ErrorReport {
+	_, ok := err.(*ErrorString)
+	if ok {
+		panic("how?")
+	}
+	typestr := fmt.Sprintf("%T", err)
+
+	err = errorStringConvert(err)
+	errstr := ""
+	if err != nil {
+		errstr = err.Error()
+	}
+	return &ErrorReport{
+		Op:       op,
+		Path:     path,
+		Err:      err,
+		StackStr: stackstr,
+		TypeStr:  typestr,
+		ErrStr:   errstr,
+	}
+}
+
+type ErrorString struct {
+	Err string
+}
+
+func (e *ErrorString) Error() string {
+	return e.Err
+}
+
+func errorStringConvert(err error) error {
+	if err == nil {
+		return nil
+	}
+	buf := new(bytes.Buffer)
+	if gob.NewEncoder(buf).Encode(err) == nil {
+		return err
+	}
+	return &ErrorString{err.Error()}
+}
+
+type Testcase struct {
+	TestNo       int         `json:"test_no"`
+	PreCondition string      `json:"pre_condition"`
+	Op           string      `json:"op"`
+	Path         string      `json:"path"`
+	Flags        int         `json:"flags"`
+	Mode         os.FileMode `json:"mode"`
+
+	Errors map[string]*ErrorReport
+}
+
+func (t *Testcase) Report() string {
+	buff := new(bytes.Buffer)
+	data, _ := json.Marshal(t)
+	json.Indent(buff, data, "\t", "  ")
+	return fmt.Sprintf("%s\n", string(buff.Bytes()))
+}
+
+func init() {
+	var errno syscall.Errno
+	patherr := new(os.PathError)
+	errorerrorstring := errors.New("error")
+	errorstring := new(ErrorString)
+	gob.Register(patherr)
+	gob.Register(errno)
+	gob.Register(errorerrorstring) // apparently this won't work
+	gob.Register(errorstring)
+
+}
+
+func testDir() (testdir string, cleanup func(), err error) {
 
 	// assign noop to cleanup until there is something to clean up.
 	cleanup = func() {}
 	timestamp := time.Now().Format(time.RFC3339)
-	testdir = filepath.Join(path, fmt.Sprintf("FsTestDir%s", timestamp))
+	testdir = filepath.Join(os.TempDir(), fmt.Sprintf("fstesting%s", timestamp))
 
 	err = os.Mkdir(testdir, 0777)
 	if err != nil {
+		panic(err.Error())
 		return testdir, cleanup, err
 	}
 
@@ -67,8 +172,6 @@ func OsTestDir(path string) (testdir string, cleanup func(), err error) {
 	return testdir, cleanup, err
 }
 
-// FsTestDir is similar to OsTestDir, but performs all operations on a
-// absfs.FileSystem.
 // FsTestDir Creates a timestamped folder for filesystem testing, and changes directory
 // to it.
 // Returns the path to the new directory, a cleanup function that and and
@@ -77,33 +180,32 @@ func OsTestDir(path string) (testdir string, cleanup func(), err error) {
 // and removes testdir and all of it's contents.
 func FsTestDir(fs absfs.FileSystem, path string) (testdir string, cleanup func(), err error) {
 
-	// assign noop to cleanup until there is something to clean up.
-	cleanup = func() {}
 	timestamp := time.Now().Format(time.RFC3339)
 	testdir = filepath.Join(path, fmt.Sprintf("FsTestDir%s", timestamp))
-
-	err = fs.Mkdir(testdir, 0777)
+	var cwd string
+	cwd, err = fs.Getwd()
 	if err != nil {
 		return testdir, cleanup, err
 	}
-
-	// capture the current working directory
-	var startingDir string
-	startingDir, err = fs.Getwd()
-	if err != nil {
-		return testdir, cleanup, err
-	}
-
 	cleanup = func() {
-		fs.Chdir(startingDir)
+		fs.Chdir(cwd)
 		err := fs.RemoveAll(testdir)
 		if err != nil {
 			panic(err)
 		}
 	}
 
-	err = fs.Chdir(testdir)
-	return testdir, cleanup, err
+	for _, path := range []string{path, testdir} {
+		_, err = fs.Stat(path)
+		if os.IsNotExist(err) {
+			err = fs.Mkdir(path, 0777)
+			if err != nil {
+				return testdir, cleanup, err
+			}
+		}
+	}
+
+	return testdir, cleanup, fs.Chdir(testdir)
 }
 
 // GenerateTestcases runs all tests on the `os` package to establish baseline
@@ -113,7 +215,12 @@ func FsTestDir(fs absfs.FileSystem, path string) (testdir string, cleanup func()
 // `fn` returns an error then testcase generation will stop and GenerateTestcases
 // will return an the same error and the testcases crated so far.
 // (TODO: many tests still to be added to exercise the entire FileSystem interface)
-func GenerateTestcases(testdir string, fn func(*Testcase) error) (testcases []*Testcase, err error) {
+func AutoTest(fn func(*Testcase) error) error {
+	testdir, cleanup, err := testDir()
+	defer cleanup()
+	if err != nil {
+		return err
+	}
 
 	// Various OpenFile pre-conditions
 	preconditions := []string{
@@ -124,7 +231,7 @@ func GenerateTestcases(testdir string, fn func(*Testcase) error) (testcases []*T
 	}
 	testNo := 0
 	if testdir == "" {
-		return nil, errors.New("testdir undefined")
+		return errors.New("testdir undefined")
 	}
 
 	// define noop function if needed
@@ -133,7 +240,7 @@ func GenerateTestcases(testdir string, fn func(*Testcase) error) (testcases []*T
 			return nil
 		}
 	}
-	err = ForEveryFlag(func(flag int) error {
+	return ForEveryFlag(func(flag int) error {
 		return ForEveryPermission(func(mode os.FileMode) error {
 			for _, pathPrefix := range []string{testdir, ".", ""} {
 				for _, condition := range preconditions {
@@ -179,41 +286,38 @@ func GenerateTestcases(testdir string, fn func(*Testcase) error) (testcases []*T
 							return err
 						}
 					}
+					Errors := make(map[string]*ErrorReport)
+
+					// Tests
 
 					// OpenFile test
-					f, openErr := os.OpenFile(name, flag, os.FileMode(mode))
+					f, err := os.OpenFile(name, flag, os.FileMode(mode))
+					Errors["OpenFile"] = NewErrorReport("OpenFile", name, err, fmt.Sprintf("%+v", err))
+					if f != nil {
+						// Name test
+						fname := f.Name()
+						Errors["Name"] = NewErrorReport("Name", fname, nil, "")
 
-					// Write test
-					writedata := []byte("The quick brown fox, jumped over the lazy dog!")
-					n, writeErr := f.Write(writedata)
-					_ = n
-					// TODO: check if n == len(writedata)
+						// Write test
+						writedata := []byte("The quick brown fox, jumped over the lazy dog!")
+						n, err := f.Write(writedata)
+						Errors["Write"] = NewErrorReport("Write", name, err, fmt.Sprintf("%+v", err))
+						_ = n
+						// TODO: check if n == len(writedata)
 
-					// Read test
-					f.Seek(0, io.SeekStart)
-					readdata := make([]byte, 512)
-					n, readErr := f.Read(readdata)
-					readdata = readdata[:n]
-					_ = readdata
+						// Read test
+						f.Seek(0, io.SeekStart)
+						readdata := make([]byte, 512)
+						n, err = f.Read(readdata)
+						Errors["Read"] = NewErrorReport("Read", name, err, fmt.Sprintf("%+v", err))
+						readdata = readdata[:n]
+						_ = readdata
 
-					// Close test
-					closeErr := f.Close()
+						// Close test
+						err = f.Close()
+						Errors["Close"] = NewErrorReport("Close", name, err, fmt.Sprintf("%+v", err))
+					}
 
-					// Capture all available error strings
-					var OpenErrString, WriteErrString, ReadErrString, CloseErrString string
-					if openErr != nil {
-						OpenErrString = openErr.Error()
-					}
-					if writeErr != nil {
-						WriteErrString = writeErr.Error()
-					}
-					if readErr != nil {
-						ReadErrString = readErr.Error()
-					}
-					if closeErr != nil {
-						CloseErrString = closeErr.Error()
-					}
-					// Create a new test case with above values.
 					testcase := &Testcase{
 						TestNo:       testNo,
 						PreCondition: condition,
@@ -221,18 +325,7 @@ func GenerateTestcases(testdir string, fn func(*Testcase) error) (testcases []*T
 						Path:         name,
 						Flags:        flag,
 						Mode:         os.FileMode(mode),
-
-						OpenErr:       openErr,
-						OpenErrString: OpenErrString,
-
-						WriteErr:       writeErr,
-						WriteErrString: WriteErrString,
-
-						ReadErr:       readErr,
-						ReadErrString: ReadErrString,
-
-						CloseErr:       closeErr,
-						CloseErrString: CloseErrString,
+						Errors:       Errors,
 					}
 
 					err = fn(testcase)
@@ -240,22 +333,20 @@ func GenerateTestcases(testdir string, fn func(*Testcase) error) (testcases []*T
 						return err
 					}
 
-					testcases = append(testcases, testcase)
 					testNo++
 				}
 			}
 			return nil
 		})
 	})
-	if err != nil {
-		return testcases, err
-	}
-
-	return testcases, nil
 }
 
 func FsTest(fs absfs.FileSystem, path string, testcase *Testcase) (*Testcase, error) {
+	// defer fmt.Fprintf(os.Stderr, "FsTest %s\n", blue(path))
 	name, err := pretest(fs, path, testcase)
+	if err != nil {
+		return nil, err
+	}
 
 	newtestcase, err := test(fs, testcase.TestNo, name, testcase.Flags, testcase.Mode, testcase.PreCondition)
 	posttest(fs, newtestcase)
@@ -292,7 +383,7 @@ func pretest(fs absfs.FileSystem, path string, testcase *Testcase) (string, erro
 
 	case "dir":
 		name = filepath.Join(path, fmt.Sprintf("fstestingDir%08d", testcase.TestNo))
-		err := os.Mkdir(name, 0777)
+		err := fs.Mkdir(name, 0777)
 		if err != nil {
 			return name, err
 		}
@@ -317,39 +408,36 @@ func posttest(fs absfs.FileSystem, testcase *Testcase) error {
 }
 
 func test(fs absfs.FileSystem, testNo int, name string, flags int, mode os.FileMode, precondition string) (*Testcase, error) {
+	Errors := make(map[string]*ErrorReport)
 
 	// OpenFile test
-	f, openErr := os.OpenFile(name, flags, os.FileMode(mode))
+	f, err := fs.OpenFile(name, flags, mode)
+	Errors["OpenFile"] = NewErrorReport("OpenFile", name, err, fmt.Sprintf("%+v", err))
+	var n int
 
-	// Write test
-	writedata := []byte("The quick brown fox, jumped over the lazy dog!")
-	n, writeErr := f.Write(writedata)
-	_ = n
-	// TODO: check if n == len(writedata)
+	if f != nil {
+		// Name test
+		fname := f.Name()
+		Errors["Name"] = NewErrorReport("Name", fname, nil, "")
 
-	// Read test
-	f.Seek(0, io.SeekStart)
-	readdata := make([]byte, 512)
-	n, readErr := f.Read(readdata)
-	readdata = readdata[:n]
-	_ = readdata
+		// Write test
+		writedata := []byte("The quick brown fox, jumped over the lazy dog!")
+		n, err = f.Write(writedata)
+		Errors["Write"] = NewErrorReport("Write", name, err, fmt.Sprintf("%+v", err))
+		_ = n
+		// TODO: check if n == len(writedata)
 
-	// Close test
-	closeErr := f.Close()
+		// Read test
+		f.Seek(0, io.SeekStart)
+		readdata := make([]byte, 512)
+		n, err = f.Read(readdata)
+		Errors["Read"] = NewErrorReport("Read", name, err, fmt.Sprintf("%+v", err))
+		readdata = readdata[:n]
+		_ = readdata
 
-	// Capture all available error strings
-	var OpenErrString, WriteErrString, ReadErrString, CloseErrString string
-	if openErr != nil {
-		OpenErrString = openErr.Error()
-	}
-	if writeErr != nil {
-		WriteErrString = writeErr.Error()
-	}
-	if readErr != nil {
-		ReadErrString = readErr.Error()
-	}
-	if closeErr != nil {
-		CloseErrString = closeErr.Error()
+		// Close test
+		err = f.Close()
+		Errors["Close"] = NewErrorReport("Close", name, err, fmt.Sprintf("%+v", err))
 	}
 
 	// Create a new test case with above values.
@@ -360,18 +448,7 @@ func test(fs absfs.FileSystem, testNo int, name string, flags int, mode os.FileM
 		Path:         name,
 		Flags:        flags,
 		Mode:         os.FileMode(mode),
-
-		OpenErr:       openErr,
-		OpenErrString: OpenErrString,
-
-		WriteErr:       writeErr,
-		WriteErrString: WriteErrString,
-
-		ReadErr:       readErr,
-		ReadErrString: ReadErrString,
-
-		CloseErr:       closeErr,
-		CloseErrString: CloseErrString,
+		Errors:       Errors,
 	}
 
 	return testcase, nil
@@ -390,24 +467,38 @@ func CompareErrors(err1 error, err2 error) error {
 	case *os.PathError:
 		v2, ok := err2.(*os.PathError)
 		if !ok {
-			return errors.Errorf("errors differ in type %T != %T", err1, err2)
+			return fmt.Errorf("errors differ in type %T != %T", err1, err2)
 		}
 
 		var list []string
 
-		if v1.Path == v2.Path {
+		if path.Base(v1.Path) != path.Base(v2.Path) {
 			list = append(list, fmt.Sprintf("paths not equal %q != %q", v1.Path, v2.Path))
 		}
+
 		if v1.Op != v2.Op {
 			list = append(list, fmt.Sprintf("ops not equal %q != %q", v1.Op, v2.Op))
 		}
+
 		if v1.Err.Error() != v2.Err.Error() {
 			list = append(list, fmt.Sprintf("errors not equal %q != %q", v1.Err.Error(), v2.Err.Error()))
 		}
+
 		if len(list) == 0 {
 			return nil
 		}
+
 		return fmt.Errorf("os.PathErrors:  %s", strings.Join(list, "; "))
+
+	case *ErrorString:
+		v2, ok := err2.(*ErrorString)
+		if !ok {
+			return fmt.Errorf("errors differ in type %T != %T", err1, err2)
+		}
+		_ = v2
+
+	default:
+		panic(fmt.Sprintf("un-handled types %T, ", err1, err2))
 	}
 
 	if err1.Error() != err2.Error() {
