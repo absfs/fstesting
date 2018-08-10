@@ -62,7 +62,11 @@ func (e *ErrorReport) String() string {
 }
 
 func (e *ErrorReport) TypesEqual(r *ErrorReport) bool {
-	return e.Type() == r.Type()
+	reply := e.Type() == r.Type()
+	if !reply {
+		fmt.Printf("TypesEqual: %q, %q", e.Type(), r.Type())
+	}
+	return reply
 }
 
 func (e *ErrorReport) Equal(r *ErrorReport) bool {
@@ -174,8 +178,7 @@ func testDir() (testdir string, cleanup func(), err error) {
 
 // FsTestDir Creates a timestamped folder for filesystem testing, and changes directory
 // to it.
-// Returns the path to the new directory, a cleanup function that and and
-// an error.
+// Returns the path to the new directory, a cleanup function and an error.
 // The `cleanup` method changes the directory back to the original location
 // and removes testdir and all of it's contents.
 func FsTestDir(fs absfs.FileSystem, path string) (testdir string, cleanup func(), err error) {
@@ -185,6 +188,7 @@ func FsTestDir(fs absfs.FileSystem, path string) (testdir string, cleanup func()
 	var cwd string
 	cwd, err = fs.Getwd()
 	if err != nil {
+		panic(err)
 		return testdir, cleanup, err
 	}
 	cleanup = func() {
@@ -196,16 +200,19 @@ func FsTestDir(fs absfs.FileSystem, path string) (testdir string, cleanup func()
 	}
 
 	for _, path := range []string{path, testdir} {
-		_, err = fs.Stat(path)
-		if os.IsNotExist(err) {
-			err = fs.Mkdir(path, 0777)
-			if err != nil {
-				return testdir, cleanup, err
-			}
+		fmt.Printf("Mkdir(%q)\n", path)
+		err := fs.Mkdir(path, 0777)
+		if os.IsExist(err) {
+			continue
 		}
 	}
 
-	return testdir, cleanup, fs.Chdir(testdir)
+	err = fs.Chdir(testdir)
+	if err != nil {
+		return testdir, cleanup, err
+	}
+
+	return testdir, cleanup, nil
 }
 
 // GenerateTestcases runs all tests on the `os` package to establish baseline
@@ -215,7 +222,7 @@ func FsTestDir(fs absfs.FileSystem, path string) (testdir string, cleanup func()
 // `fn` returns an error then testcase generation will stop and GenerateTestcases
 // will return an the same error and the testcases crated so far.
 // (TODO: many tests still to be added to exercise the entire FileSystem interface)
-func AutoTest(fn func(*Testcase) error) error {
+func AutoTest(startno int, fn func(*Testcase) error) error {
 	testdir, cleanup, err := testDir()
 	defer cleanup()
 	if err != nil {
@@ -244,6 +251,10 @@ func AutoTest(fn func(*Testcase) error) error {
 		return ForEveryPermission(func(mode os.FileMode) error {
 			for _, pathPrefix := range []string{testdir, ".", ""} {
 				for _, condition := range preconditions {
+					if testNo < startno {
+						testNo++
+						continue
+					}
 
 					name := filepath.Join(pathPrefix, fmt.Sprintf("fstestingFile%08d", testNo))
 					switch condition {
@@ -498,7 +509,7 @@ func CompareErrors(err1 error, err2 error) error {
 		_ = v2
 
 	default:
-		panic(fmt.Sprintf("un-handled types %T, ", err1, err2))
+		panic(fmt.Sprintf("un-handled types %T, %T", err1, err2))
 	}
 
 	if err1.Error() != err2.Error() {
