@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"io"
 	"os"
-	"path/filepath"
+	"path"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -42,23 +42,23 @@ func FuzzCreate(f *testing.F, fs absfs.FileSystem, testDir string) {
 			return // Skip invalid UTF-8
 		}
 
-		path := filepath.Join(testDir, "fuzz_create", name)
+		filePath := path.Join(testDir, "fuzz_create", name)
 
 		// Ensure parent directory exists
-		dir := filepath.Dir(path)
+		dir := path.Dir(filePath)
 		if err := fs.MkdirAll(dir, 0755); err != nil {
 			return // Parent creation failed, that's ok
 		}
 
 		// Attempt to create file - should not panic
-		file, err := fs.Create(path)
+		file, err := fs.Create(filePath)
 		if err != nil {
 			return // Creation failed, that's ok
 		}
 		defer file.Close()
 
 		// If creation succeeded, verify we can stat it
-		info, err := fs.Stat(path)
+		info, err := fs.Stat(filePath)
 		if err != nil {
 			t.Errorf("created file but Stat failed: %v", err)
 			return
@@ -69,7 +69,7 @@ func FuzzCreate(f *testing.F, fs absfs.FileSystem, testDir string) {
 		}
 
 		// Clean up
-		fs.Remove(path)
+		fs.Remove(filePath)
 	})
 }
 
@@ -92,13 +92,13 @@ func FuzzReadWrite(f *testing.F, fs absfs.FileSystem, testDir string) {
 	counter := 0
 	f.Fuzz(func(t *testing.T, data []byte) {
 		counter++
-		path := filepath.Join(testDir, "fuzz_rw", string(rune('a'+counter%26))+".bin")
+		filePath := path.Join(testDir, "fuzz_rw", string(rune('a'+counter%26))+".bin")
 
 		// Ensure directory exists
-		fs.MkdirAll(filepath.Dir(path), 0755)
+		fs.MkdirAll(path.Dir(filePath), 0755)
 
 		// Write
-		file, err := fs.Create(path)
+		file, err := fs.Create(filePath)
 		if err != nil {
 			t.Fatalf("Create failed: %v", err)
 		}
@@ -106,7 +106,7 @@ func FuzzReadWrite(f *testing.F, fs absfs.FileSystem, testDir string) {
 		n, err := file.Write(data)
 		if err != nil {
 			file.Close()
-			fs.Remove(path)
+			fs.Remove(filePath)
 			return // Write error is ok for fuzz testing
 		}
 		if n != len(data) {
@@ -115,7 +115,7 @@ func FuzzReadWrite(f *testing.F, fs absfs.FileSystem, testDir string) {
 		file.Close()
 
 		// Read back
-		file, err = fs.Open(path)
+		file, err = fs.Open(filePath)
 		if err != nil {
 			t.Fatalf("Open failed: %v", err)
 		}
@@ -131,7 +131,7 @@ func FuzzReadWrite(f *testing.F, fs absfs.FileSystem, testDir string) {
 		}
 
 		// Clean up
-		fs.Remove(path)
+		fs.Remove(filePath)
 	})
 }
 
@@ -155,11 +155,11 @@ func FuzzRename(f *testing.F, fs absfs.FileSystem, testDir string) {
 			return
 		}
 
-		oldPath := filepath.Join(testDir, "fuzz_rename", oldName)
-		newPath := filepath.Join(testDir, "fuzz_rename", newName)
+		oldPath := path.Join(testDir, "fuzz_rename", oldName)
+		newPath := path.Join(testDir, "fuzz_rename", newName)
 
 		// Create source file
-		fs.MkdirAll(filepath.Dir(oldPath), 0755)
+		fs.MkdirAll(path.Dir(oldPath), 0755)
 		file, err := fs.Create(oldPath)
 		if err != nil {
 			return
@@ -169,7 +169,7 @@ func FuzzRename(f *testing.F, fs absfs.FileSystem, testDir string) {
 		file.Close()
 
 		// Ensure target directory exists
-		fs.MkdirAll(filepath.Dir(newPath), 0755)
+		fs.MkdirAll(path.Dir(newPath), 0755)
 
 		// Attempt rename
 		err = fs.Rename(oldPath, newPath)
@@ -217,15 +217,15 @@ func FuzzMkdir(f *testing.F, fs absfs.FileSystem, testDir string) {
 			return
 		}
 
-		path := filepath.Join(testDir, "fuzz_mkdir", name)
+		dirPath := path.Join(testDir, "fuzz_mkdir", name)
 
-		err := fs.MkdirAll(path, 0755)
+		err := fs.MkdirAll(dirPath, 0755)
 		if err != nil {
 			return // Mkdir can fail for various valid reasons
 		}
 
 		// Verify it's a directory
-		info, err := fs.Stat(path)
+		info, err := fs.Stat(dirPath)
 		if err != nil {
 			t.Errorf("MkdirAll succeeded but Stat failed: %v", err)
 			return
@@ -236,7 +236,7 @@ func FuzzMkdir(f *testing.F, fs absfs.FileSystem, testDir string) {
 		}
 
 		// Clean up
-		fs.RemoveAll(path)
+		fs.RemoveAll(dirPath)
 	})
 }
 
@@ -251,12 +251,12 @@ func FuzzPathTraversal(f *testing.F, fs absfs.FileSystem, testDir string) {
 	f.Add("subdir/./../../escape")
 	f.Add(strings.Repeat("../", 100) + "escape")
 
-	f.Fuzz(func(t *testing.T, path string) {
-		if path == "" || strings.ContainsAny(path, "\x00") {
+	f.Fuzz(func(t *testing.T, testPath string) {
+		if testPath == "" || strings.ContainsAny(testPath, "\x00") {
 			return
 		}
 
-		fullPath := filepath.Join(testDir, path)
+		fullPath := path.Join(testDir, testPath)
 
 		// These operations should either:
 		// 1. Fail with an error (preferred for sandboxed fs)
@@ -289,19 +289,19 @@ func FuzzOpenFlags(f *testing.F, fs absfs.FileSystem, testDir string) {
 	counter := 0
 	f.Fuzz(func(t *testing.T, flags int) {
 		counter++
-		path := filepath.Join(testDir, "fuzz_flags", string(rune('a'+counter%26))+".txt")
-		fs.MkdirAll(filepath.Dir(path), 0755)
+		filePath := path.Join(testDir, "fuzz_flags", string(rune('a'+counter%26))+".txt")
+		fs.MkdirAll(path.Dir(filePath), 0755)
 
 		// Pre-create file for some tests
 		if counter%2 == 0 {
-			if f, err := fs.Create(path); err == nil {
+			if f, err := fs.Create(filePath); err == nil {
 				f.Write([]byte("existing content"))
 				f.Close()
 			}
 		}
 
 		// Try to open with given flags - should not panic
-		file, err := fs.OpenFile(path, flags, 0644)
+		file, err := fs.OpenFile(filePath, flags, 0644)
 		if err != nil {
 			return // Open errors are expected for invalid flag combos
 		}
@@ -317,6 +317,6 @@ func FuzzOpenFlags(f *testing.F, fs absfs.FileSystem, testDir string) {
 		}
 
 		// Clean up
-		fs.Remove(path)
+		fs.Remove(filePath)
 	})
 }

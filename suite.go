@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
+	"path"
 	"strings"
 	"testing"
 	"time"
@@ -41,7 +41,7 @@ func (s *Suite) Run(t *testing.T) {
 	if testDir == "" {
 		testDir = s.FS.TempDir()
 	}
-	testDir = filepath.Join(testDir, fmt.Sprintf("fstesting_%d", time.Now().UnixNano()))
+	testDir = path.Join(testDir, fmt.Sprintf("fstesting_%d", time.Now().UnixNano()))
 
 	if err := s.FS.MkdirAll(testDir, 0755); err != nil {
 		t.Fatalf("failed to create test directory: %v", err)
@@ -94,11 +94,11 @@ func (s *Suite) testFileOperations(t *testing.T, testDir string) {
 	t.Helper()
 
 	t.Run("CreateAndRead", func(t *testing.T) {
-		path := filepath.Join(testDir, "create_test.txt")
+		filePath := path.Join(testDir, "create_test.txt")
 		content := []byte("hello, world")
 
 		// Create file
-		f, err := s.FS.Create(path)
+		f, err := s.FS.Create(filePath)
 		if err != nil {
 			t.Fatalf("Create failed: %v", err)
 		}
@@ -116,7 +116,7 @@ func (s *Suite) testFileOperations(t *testing.T, testDir string) {
 		}
 
 		// Read back
-		f, err = s.FS.Open(path)
+		f, err = s.FS.Open(filePath)
 		if err != nil {
 			t.Fatalf("Open failed: %v", err)
 		}
@@ -133,28 +133,28 @@ func (s *Suite) testFileOperations(t *testing.T, testDir string) {
 	})
 
 	t.Run("OpenFile", func(t *testing.T) {
-		path := filepath.Join(testDir, "openfile_test.txt")
+		filePath := path.Join(testDir, "openfile_test.txt")
 
 		// O_CREATE | O_EXCL should create new file
-		f, err := s.FS.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+		f, err := s.FS.OpenFile(filePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
 		if err != nil {
 			t.Fatalf("OpenFile O_CREATE|O_EXCL failed: %v", err)
 		}
 		f.Close()
 
 		// O_EXCL should fail if file exists
-		_, err = s.FS.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+		_, err = s.FS.OpenFile(filePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
 		if err == nil {
 			t.Error("OpenFile O_EXCL should fail for existing file")
 		}
 	})
 
 	t.Run("Truncate", func(t *testing.T) {
-		path := filepath.Join(testDir, "truncate_test.txt")
+		filePath := path.Join(testDir, "truncate_test.txt")
 		content := []byte("hello, world")
 
 		// Create file with content
-		f, err := s.FS.Create(path)
+		f, err := s.FS.Create(filePath)
 		if err != nil {
 			t.Fatalf("Create failed: %v", err)
 		}
@@ -162,12 +162,12 @@ func (s *Suite) testFileOperations(t *testing.T, testDir string) {
 		f.Close()
 
 		// Truncate to 5 bytes
-		if err := s.FS.Truncate(path, 5); err != nil {
+		if err := s.FS.Truncate(filePath, 5); err != nil {
 			t.Fatalf("Truncate failed: %v", err)
 		}
 
 		// Verify size
-		info, err := s.FS.Stat(path)
+		info, err := s.FS.Stat(filePath)
 		if err != nil {
 			t.Fatalf("Stat failed: %v", err)
 		}
@@ -177,26 +177,26 @@ func (s *Suite) testFileOperations(t *testing.T, testDir string) {
 	})
 
 	t.Run("Remove", func(t *testing.T) {
-		path := filepath.Join(testDir, "remove_test.txt")
+		filePath := path.Join(testDir, "remove_test.txt")
 
 		// Create and remove
-		f, _ := s.FS.Create(path)
+		f, _ := s.FS.Create(filePath)
 		f.Close()
 
-		if err := s.FS.Remove(path); err != nil {
+		if err := s.FS.Remove(filePath); err != nil {
 			t.Fatalf("Remove failed: %v", err)
 		}
 
 		// Verify gone
-		_, err := s.FS.Stat(path)
+		_, err := s.FS.Stat(filePath)
 		if !os.IsNotExist(err) {
 			t.Errorf("file should not exist after Remove, got err: %v", err)
 		}
 	})
 
 	t.Run("Rename", func(t *testing.T) {
-		oldPath := filepath.Join(testDir, "rename_old.txt")
-		newPath := filepath.Join(testDir, "rename_new.txt")
+		oldPath := path.Join(testDir, "rename_old.txt")
+		newPath := path.Join(testDir, "rename_new.txt")
 		content := []byte("rename test content")
 
 		// Create file
@@ -229,14 +229,14 @@ func (s *Suite) testFileOperations(t *testing.T, testDir string) {
 	})
 
 	t.Run("Stat", func(t *testing.T) {
-		path := filepath.Join(testDir, "stat_test.txt")
+		filePath := path.Join(testDir, "stat_test.txt")
 		content := []byte("stat test")
 
-		f, _ := s.FS.Create(path)
+		f, _ := s.FS.Create(filePath)
 		f.Write(content)
 		f.Close()
 
-		info, err := s.FS.Stat(path)
+		info, err := s.FS.Stat(filePath)
 		if err != nil {
 			t.Fatalf("Stat failed: %v", err)
 		}
@@ -260,13 +260,13 @@ func (s *Suite) testDirectoryOperations(t *testing.T, testDir string) {
 	t.Helper()
 
 	t.Run("Mkdir", func(t *testing.T) {
-		path := filepath.Join(testDir, "mkdir_test")
+		dirPath := path.Join(testDir, "mkdir_test")
 
-		if err := s.FS.Mkdir(path, 0755); err != nil {
+		if err := s.FS.Mkdir(dirPath, 0755); err != nil {
 			t.Fatalf("Mkdir failed: %v", err)
 		}
 
-		info, err := s.FS.Stat(path)
+		info, err := s.FS.Stat(dirPath)
 		if err != nil {
 			t.Fatalf("Stat failed: %v", err)
 		}
@@ -277,13 +277,13 @@ func (s *Suite) testDirectoryOperations(t *testing.T, testDir string) {
 	})
 
 	t.Run("MkdirAll", func(t *testing.T) {
-		path := filepath.Join(testDir, "mkdirall", "nested", "path")
+		dirPath := path.Join(testDir, "mkdirall", "nested", "path")
 
-		if err := s.FS.MkdirAll(path, 0755); err != nil {
+		if err := s.FS.MkdirAll(dirPath, 0755); err != nil {
 			t.Fatalf("MkdirAll failed: %v", err)
 		}
 
-		info, err := s.FS.Stat(path)
+		info, err := s.FS.Stat(dirPath)
 		if err != nil {
 			t.Fatalf("Stat failed: %v", err)
 		}
@@ -294,9 +294,9 @@ func (s *Suite) testDirectoryOperations(t *testing.T, testDir string) {
 	})
 
 	t.Run("RemoveAll", func(t *testing.T) {
-		base := filepath.Join(testDir, "removeall_test")
-		nested := filepath.Join(base, "nested")
-		file := filepath.Join(nested, "file.txt")
+		base := path.Join(testDir, "removeall_test")
+		nested := path.Join(base, "nested")
+		file := path.Join(nested, "file.txt")
 
 		s.FS.MkdirAll(nested, 0755)
 		f, _ := s.FS.Create(file)
@@ -313,18 +313,18 @@ func (s *Suite) testDirectoryOperations(t *testing.T, testDir string) {
 	})
 
 	t.Run("ReadDir", func(t *testing.T) {
-		base := filepath.Join(testDir, "readdir_test")
+		base := path.Join(testDir, "readdir_test")
 		s.FS.Mkdir(base, 0755)
 
 		// Create some files
 		names := []string{"a.txt", "b.txt", "c.txt"}
 		for _, name := range names {
-			f, _ := s.FS.Create(filepath.Join(base, name))
+			f, _ := s.FS.Create(path.Join(base, name))
 			f.Close()
 		}
 
 		// Create a subdirectory
-		s.FS.Mkdir(filepath.Join(base, "subdir"), 0755)
+		s.FS.Mkdir(path.Join(base, "subdir"), 0755)
 
 		// Read directory
 		f, err := s.FS.Open(base)
@@ -350,11 +350,11 @@ func (s *Suite) testPathHandling(t *testing.T, testDir string) {
 
 	t.Run("DotPaths", func(t *testing.T) {
 		// Current directory reference
-		base := filepath.Join(testDir, "dotpaths")
+		base := path.Join(testDir, "dotpaths")
 		s.FS.Mkdir(base, 0755)
 
-		path := filepath.Join(base, ".", "file.txt")
-		f, err := s.FS.Create(path)
+		filePath := path.Join(base, ".", "file.txt")
+		f, err := s.FS.Create(filePath)
 		if err != nil {
 			t.Fatalf("Create with . in path failed: %v", err)
 		}
@@ -362,7 +362,7 @@ func (s *Suite) testPathHandling(t *testing.T, testDir string) {
 	})
 
 	t.Run("TrailingSlash", func(t *testing.T) {
-		base := filepath.Join(testDir, "trailingslash")
+		base := path.Join(testDir, "trailingslash")
 		s.FS.Mkdir(base, 0755)
 
 		// Stat directory with trailing slash
@@ -373,7 +373,7 @@ func (s *Suite) testPathHandling(t *testing.T, testDir string) {
 	})
 
 	t.Run("SpecialCharacters", func(t *testing.T) {
-		base := filepath.Join(testDir, "specialchars")
+		base := path.Join(testDir, "specialchars")
 		s.FS.Mkdir(base, 0755)
 
 		// Test various special characters in filenames
@@ -385,15 +385,15 @@ func (s *Suite) testPathHandling(t *testing.T, testDir string) {
 		}
 
 		for _, name := range names {
-			path := filepath.Join(base, name)
-			f, err := s.FS.Create(path)
+			filePath := path.Join(base, name)
+			f, err := s.FS.Create(filePath)
 			if err != nil {
 				t.Errorf("Create %q failed: %v", name, err)
 				continue
 			}
 			f.Close()
 
-			_, err = s.FS.Stat(path)
+			_, err = s.FS.Stat(filePath)
 			if err != nil {
 				t.Errorf("Stat %q failed: %v", name, err)
 			}
@@ -401,7 +401,7 @@ func (s *Suite) testPathHandling(t *testing.T, testDir string) {
 	})
 
 	t.Run("Unicode", func(t *testing.T) {
-		base := filepath.Join(testDir, "unicode")
+		base := path.Join(testDir, "unicode")
 		s.FS.Mkdir(base, 0755)
 
 		names := []string{
@@ -411,15 +411,15 @@ func (s *Suite) testPathHandling(t *testing.T, testDir string) {
 		}
 
 		for _, name := range names {
-			path := filepath.Join(base, name)
-			f, err := s.FS.Create(path)
+			filePath := path.Join(base, name)
+			f, err := s.FS.Create(filePath)
 			if err != nil {
 				t.Errorf("Create unicode %q failed: %v", name, err)
 				continue
 			}
 			f.Close()
 
-			_, err = s.FS.Stat(path)
+			_, err = s.FS.Stat(filePath)
 			if err != nil {
 				t.Errorf("Stat unicode %q failed: %v", name, err)
 			}
@@ -432,45 +432,45 @@ func (s *Suite) testErrorSemantics(t *testing.T, testDir string) {
 	t.Helper()
 
 	t.Run("NotExist", func(t *testing.T) {
-		_, err := s.FS.Stat(filepath.Join(testDir, "nonexistent"))
+		_, err := s.FS.Stat(path.Join(testDir, "nonexistent"))
 		if !os.IsNotExist(err) {
 			t.Errorf("Stat nonexistent: expected os.IsNotExist, got %v", err)
 		}
 
-		_, err = s.FS.Open(filepath.Join(testDir, "nonexistent"))
+		_, err = s.FS.Open(path.Join(testDir, "nonexistent"))
 		if !os.IsNotExist(err) {
 			t.Errorf("Open nonexistent: expected os.IsNotExist, got %v", err)
 		}
 	})
 
 	t.Run("Exist", func(t *testing.T) {
-		path := filepath.Join(testDir, "exist_test")
-		s.FS.Mkdir(path, 0755)
+		dirPath := path.Join(testDir, "exist_test")
+		s.FS.Mkdir(dirPath, 0755)
 
-		err := s.FS.Mkdir(path, 0755)
+		err := s.FS.Mkdir(dirPath, 0755)
 		if !os.IsExist(err) {
 			t.Errorf("Mkdir existing: expected os.IsExist, got %v", err)
 		}
 	})
 
 	t.Run("IsDir", func(t *testing.T) {
-		path := filepath.Join(testDir, "isdir_test")
-		s.FS.Mkdir(path, 0755)
+		dirPath := path.Join(testDir, "isdir_test")
+		s.FS.Mkdir(dirPath, 0755)
 
 		// Try to open directory as file for writing
-		_, err := s.FS.OpenFile(path, os.O_WRONLY, 0644)
+		_, err := s.FS.OpenFile(dirPath, os.O_WRONLY, 0644)
 		if err == nil {
 			t.Error("OpenFile directory for writing should fail")
 		}
 	})
 
 	t.Run("NotDir", func(t *testing.T) {
-		path := filepath.Join(testDir, "notdir_test.txt")
-		f, _ := s.FS.Create(path)
+		filePath := path.Join(testDir, "notdir_test.txt")
+		f, _ := s.FS.Create(filePath)
 		f.Close()
 
 		// Try to read file as directory
-		f, err := s.FS.Open(path)
+		f, err := s.FS.Open(filePath)
 		if err != nil {
 			t.Fatalf("Open file failed: %v", err)
 		}
@@ -494,8 +494,8 @@ func (s *Suite) testSymlinks(t *testing.T, testDir string) {
 	}
 
 	t.Run("CreateAndRead", func(t *testing.T) {
-		target := filepath.Join(testDir, "symlink_target.txt")
-		link := filepath.Join(testDir, "symlink_link")
+		target := path.Join(testDir, "symlink_target.txt")
+		link := path.Join(testDir, "symlink_link")
 
 		// Create target
 		f, _ := s.FS.Create(target)
@@ -519,8 +519,8 @@ func (s *Suite) testSymlinks(t *testing.T, testDir string) {
 	})
 
 	t.Run("Lstat", func(t *testing.T) {
-		target := filepath.Join(testDir, "lstat_target.txt")
-		link := filepath.Join(testDir, "lstat_link")
+		target := path.Join(testDir, "lstat_target.txt")
+		link := path.Join(testDir, "lstat_link")
 
 		f, _ := s.FS.Create(target)
 		f.Close()
@@ -548,15 +548,15 @@ func (s *Suite) testPermissions(t *testing.T, testDir string) {
 	t.Helper()
 
 	t.Run("Chmod", func(t *testing.T) {
-		path := filepath.Join(testDir, "chmod_test.txt")
-		f, _ := s.FS.Create(path)
+		filePath := path.Join(testDir, "chmod_test.txt")
+		f, _ := s.FS.Create(filePath)
 		f.Close()
 
-		if err := s.FS.Chmod(path, 0600); err != nil {
+		if err := s.FS.Chmod(filePath, 0600); err != nil {
 			t.Fatalf("Chmod failed: %v", err)
 		}
 
-		info, _ := s.FS.Stat(path)
+		info, _ := s.FS.Stat(filePath)
 		// Mask out non-permission bits
 		got := info.Mode().Perm()
 		if got != 0600 {
@@ -570,18 +570,18 @@ func (s *Suite) testTimestamps(t *testing.T, testDir string) {
 	t.Helper()
 
 	t.Run("Chtimes", func(t *testing.T) {
-		path := filepath.Join(testDir, "chtimes_test.txt")
-		f, _ := s.FS.Create(path)
+		filePath := path.Join(testDir, "chtimes_test.txt")
+		f, _ := s.FS.Create(filePath)
 		f.Close()
 
 		atime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 		mtime := time.Date(2021, 6, 15, 12, 0, 0, 0, time.UTC)
 
-		if err := s.FS.Chtimes(path, atime, mtime); err != nil {
+		if err := s.FS.Chtimes(filePath, atime, mtime); err != nil {
 			t.Fatalf("Chtimes failed: %v", err)
 		}
 
-		info, _ := s.FS.Stat(path)
+		info, _ := s.FS.Stat(filePath)
 		got := info.ModTime()
 
 		// Allow 1 second tolerance for filesystems with low time resolution
@@ -597,24 +597,24 @@ func (s *Suite) testTimestamps(t *testing.T, testDir string) {
 func (s *Suite) QuickCheck(t *testing.T) {
 	t.Helper()
 
-	testDir := filepath.Join(s.FS.TempDir(), fmt.Sprintf("fstesting_quick_%d", time.Now().UnixNano()))
+	testDir := path.Join(s.FS.TempDir(), fmt.Sprintf("fstesting_quick_%d", time.Now().UnixNano()))
 	if err := s.FS.MkdirAll(testDir, 0755); err != nil {
 		t.Fatalf("failed to create test directory: %v", err)
 	}
 	defer s.FS.RemoveAll(testDir)
 
 	// Test create/read/delete cycle
-	path := filepath.Join(testDir, "quickcheck.txt")
+	filePath := path.Join(testDir, "quickcheck.txt")
 	content := []byte("quick check content")
 
-	f, err := s.FS.Create(path)
+	f, err := s.FS.Create(filePath)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	f.Write(content)
 	f.Close()
 
-	f, err = s.FS.Open(path)
+	f, err = s.FS.Open(filePath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -625,11 +625,11 @@ func (s *Suite) QuickCheck(t *testing.T) {
 		t.Fatalf("content mismatch: got %q, want %q", got, content)
 	}
 
-	if err := s.FS.Remove(path); err != nil {
+	if err := s.FS.Remove(filePath); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
 
-	if _, err := s.FS.Stat(path); !os.IsNotExist(err) {
+	if _, err := s.FS.Stat(filePath); !os.IsNotExist(err) {
 		t.Fatalf("file should not exist after Remove")
 	}
 }

@@ -3,7 +3,7 @@ package fstesting
 import (
 	"bytes"
 	"io"
-	"path/filepath"
+	"path"
 	"testing"
 
 	"github.com/absfs/absfs"
@@ -56,7 +56,7 @@ func (s *WrapperSuite) Run(t *testing.T) {
 	if testDir == "" {
 		testDir = wrapper.TempDir()
 	}
-	testDir = filepath.Join(testDir, "wrapper_test")
+	testDir = path.Join(testDir, "wrapper_test")
 
 	if err := wrapper.MkdirAll(testDir, 0755); err != nil {
 		t.Fatalf("failed to create test directory: %v", err)
@@ -95,10 +95,10 @@ func (s *WrapperSuite) testPassthrough(t *testing.T, wrapper absfs.FileSystem, t
 	}
 
 	// Create file through wrapper
-	path := filepath.Join(testDir, "passthrough.txt")
+	filePath := path.Join(testDir, "passthrough.txt")
 	content := []byte("passthrough test content")
 
-	f, err := wrapper.Create(path)
+	f, err := wrapper.Create(filePath)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -106,7 +106,7 @@ func (s *WrapperSuite) testPassthrough(t *testing.T, wrapper absfs.FileSystem, t
 	f.Close()
 
 	// Read back through wrapper
-	f, err = wrapper.Open(path)
+	f, err = wrapper.Open(filePath)
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
@@ -118,7 +118,7 @@ func (s *WrapperSuite) testPassthrough(t *testing.T, wrapper absfs.FileSystem, t
 	}
 
 	// Stat through wrapper
-	info, err := wrapper.Stat(path)
+	info, err := wrapper.Stat(filePath)
 	if err != nil {
 		t.Fatalf("Stat failed: %v", err)
 	}
@@ -127,7 +127,7 @@ func (s *WrapperSuite) testPassthrough(t *testing.T, wrapper absfs.FileSystem, t
 	}
 
 	// Remove through wrapper
-	if err := wrapper.Remove(path); err != nil {
+	if err := wrapper.Remove(filePath); err != nil {
 		t.Fatalf("Remove failed: %v", err)
 	}
 }
@@ -153,10 +153,10 @@ func (s *WrapperSuite) testDataIntegrity(t *testing.T, wrapper absfs.FileSystem,
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			path := filepath.Join(testDir, "integrity_"+tc.name+".bin")
+			filePath := path.Join(testDir, "integrity_"+tc.name+".bin")
 
 			// Write
-			f, err := wrapper.Create(path)
+			f, err := wrapper.Create(filePath)
 			if err != nil {
 				t.Fatalf("Create failed: %v", err)
 			}
@@ -171,7 +171,7 @@ func (s *WrapperSuite) testDataIntegrity(t *testing.T, wrapper absfs.FileSystem,
 			f.Close()
 
 			// Read
-			f, err = wrapper.Open(path)
+			f, err = wrapper.Open(filePath)
 			if err != nil {
 				t.Fatalf("Open failed: %v", err)
 			}
@@ -186,7 +186,7 @@ func (s *WrapperSuite) testDataIntegrity(t *testing.T, wrapper absfs.FileSystem,
 			}
 
 			// Clean up
-			wrapper.Remove(path)
+			wrapper.Remove(filePath)
 		})
 	}
 }
@@ -195,16 +195,16 @@ func (s *WrapperSuite) testDataIntegrity(t *testing.T, wrapper absfs.FileSystem,
 func (s *WrapperSuite) testWriteBlocking(t *testing.T, wrapper absfs.FileSystem, testDir string) {
 	t.Helper()
 
-	path := filepath.Join(testDir, "writeblock.txt")
+	filePath := path.Join(testDir, "writeblock.txt")
 
 	// Create should fail
-	_, err := wrapper.Create(path)
+	_, err := wrapper.Create(filePath)
 	if err == nil {
 		t.Error("Create should fail for read-only wrapper")
 	}
 
 	// Mkdir should fail
-	err = wrapper.Mkdir(filepath.Join(testDir, "newdir"), 0755)
+	err = wrapper.Mkdir(path.Join(testDir, "newdir"), 0755)
 	if err == nil {
 		t.Error("Mkdir should fail for read-only wrapper")
 	}
@@ -220,11 +220,11 @@ func (s *WrapperSuite) testWriteBlocking(t *testing.T, wrapper absfs.FileSystem,
 func (s *WrapperSuite) testTransformRoundtrip(t *testing.T, wrapper absfs.FileSystem, testDir string) {
 	t.Helper()
 
-	path := filepath.Join(testDir, "transform.bin")
+	filePath := path.Join(testDir, "transform.bin")
 	content := bytes.Repeat([]byte("compressible data pattern "), 1000)
 
 	// Write through wrapper
-	f, err := wrapper.Create(path)
+	f, err := wrapper.Create(filePath)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -232,7 +232,7 @@ func (s *WrapperSuite) testTransformRoundtrip(t *testing.T, wrapper absfs.FileSy
 	f.Close()
 
 	// Read back through wrapper - should get original data
-	f, err = wrapper.Open(path)
+	f, err = wrapper.Open(filePath)
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
@@ -244,7 +244,7 @@ func (s *WrapperSuite) testTransformRoundtrip(t *testing.T, wrapper absfs.FileSy
 	}
 
 	// Clean up
-	wrapper.Remove(path)
+	wrapper.Remove(filePath)
 }
 
 // FuzzWrapperRoundtrip fuzz tests data integrity through a wrapper.
@@ -264,11 +264,11 @@ func FuzzWrapperRoundtrip(f *testing.F, factory func(absfs.FileSystem) (absfs.Fi
 	counter := 0
 	f.Fuzz(func(t *testing.T, data []byte) {
 		counter++
-		path := filepath.Join(testDir, "fuzz_wrapper", string(rune('a'+counter%26))+".bin")
-		wrapper.MkdirAll(filepath.Dir(path), 0755)
+		filePath := path.Join(testDir, "fuzz_wrapper", string(rune('a'+counter%26))+".bin")
+		wrapper.MkdirAll(path.Dir(filePath), 0755)
 
 		// Write
-		file, err := wrapper.Create(path)
+		file, err := wrapper.Create(filePath)
 		if err != nil {
 			return
 		}
@@ -276,7 +276,7 @@ func FuzzWrapperRoundtrip(f *testing.F, factory func(absfs.FileSystem) (absfs.Fi
 		file.Close()
 
 		// Read back
-		file, err = wrapper.Open(path)
+		file, err = wrapper.Open(filePath)
 		if err != nil {
 			t.Fatalf("Open failed after successful Create: %v", err)
 		}
@@ -290,6 +290,6 @@ func FuzzWrapperRoundtrip(f *testing.F, factory func(absfs.FileSystem) (absfs.Fi
 			t.Errorf("roundtrip failed: wrote %d bytes, got %d bytes", len(data), len(got))
 		}
 
-		wrapper.Remove(path)
+		wrapper.Remove(filePath)
 	})
 }
