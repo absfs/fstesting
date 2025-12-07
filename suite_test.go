@@ -17,7 +17,7 @@ func TestSuiteWithOS(t *testing.T) {
 
 	suite := &fstesting.Suite{
 		FS:       osFS,
-		Features: fstesting.DefaultFeatures(),
+		Features: fstesting.OSFeatures(), // Use platform-appropriate features
 	}
 
 	suite.Run(t)

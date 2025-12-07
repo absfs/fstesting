@@ -137,7 +137,7 @@ func TestExample_FullSuite(t *testing.T) {
 
 	suite := &fstesting.Suite{
 		FS:       fs,
-		Features: fstesting.DefaultFeatures(),
+		Features: fstesting.OSFeatures(), // Use platform-appropriate features
 	}
 
 	suite.Run(t)
