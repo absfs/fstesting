@@ -1,5 +1,10 @@
 # fstesting
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/absfs/fstesting.svg)](https://pkg.go.dev/github.com/absfs/fstesting)
+[![Go Report Card](https://goreportcard.com/badge/github.com/absfs/fstesting)](https://goreportcard.com/report/github.com/absfs/fstesting)
+[![CI](https://github.com/absfs/fstesting/actions/workflows/ci.yml/badge.svg)](https://github.com/absfs/fstesting/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Comprehensive test suite for [absfs](https://github.com/absfs/absfs) filesystem implementations.
 
 ```go
