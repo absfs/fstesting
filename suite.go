@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"strings"
@@ -68,6 +69,10 @@ func (s *Suite) Run(t *testing.T) {
 
 	t.Run("ErrorSemantics", func(t *testing.T) {
 		s.testErrorSemantics(t, testDir)
+	})
+
+	t.Run("NewFilerMethods", func(t *testing.T) {
+		s.testNewFilerMethods(t, testDir)
 	})
 
 	if s.Features.Symlinks {
@@ -326,20 +331,31 @@ func (s *Suite) testDirectoryOperations(t *testing.T, testDir string) {
 		// Create a subdirectory
 		s.FS.Mkdir(path.Join(base, "subdir"), 0755)
 
-		// Read directory
+		// Test File.ReadDir (new method)
 		f, err := s.FS.Open(base)
 		if err != nil {
 			t.Fatalf("Open directory failed: %v", err)
 		}
 		defer f.Close()
 
-		entries, err := f.Readdir(-1)
+		var entries []fs.DirEntry
+		entries, err = f.ReadDir(-1)
 		if err != nil {
-			t.Fatalf("Readdir failed: %v", err)
+			t.Fatalf("File.ReadDir failed: %v", err)
 		}
 
 		if len(entries) != 4 { // 3 files + 1 subdir
-			t.Errorf("Readdir returned %d entries, want 4", len(entries))
+			t.Errorf("File.ReadDir returned %d entries, want 4", len(entries))
+		}
+
+		// Verify entries are DirEntry, not FileInfo
+		for _, entry := range entries {
+			if entry.Name() == "" {
+				t.Error("DirEntry has empty name")
+			}
+			// Should work with DirEntry interface
+			_ = entry.IsDir()
+			_ = entry.Type()
 		}
 	})
 }
@@ -366,7 +382,7 @@ func (s *Suite) testPathHandling(t *testing.T, testDir string) {
 		s.FS.Mkdir(base, 0755)
 
 		// Stat directory with trailing slash
-		_, err := s.FS.Stat(base + string(s.FS.Separator()))
+		_, err := s.FS.Stat(base + "/")
 		if err != nil {
 			t.Errorf("Stat with trailing slash failed: %v", err)
 		}
@@ -483,6 +499,165 @@ func (s *Suite) testErrorSemantics(t *testing.T, testDir string) {
 	})
 }
 
+// testNewFilerMethods tests the new absfs 1.0 Filer methods.
+func (s *Suite) testNewFilerMethods(t *testing.T, testDir string) {
+	t.Helper()
+
+	t.Run("Filer.ReadDir", func(t *testing.T) {
+		base := path.Join(testDir, "filer_readdir_test")
+		s.FS.MkdirAll(base, 0755)
+
+		// Create some files
+		names := []string{"file1.txt", "file2.txt", "file3.txt"}
+		for _, name := range names {
+			f, _ := s.FS.Create(path.Join(base, name))
+			f.Close()
+		}
+
+		// Create a subdirectory
+		s.FS.Mkdir(path.Join(base, "subdir"), 0755)
+
+		// Test Filer.ReadDir (filesystem method, not file method)
+		entries, err := s.FS.ReadDir(base)
+		if err != nil {
+			t.Fatalf("Filer.ReadDir failed: %v", err)
+		}
+
+		if len(entries) != 4 { // 3 files + 1 subdir
+			t.Errorf("Filer.ReadDir returned %d entries, want 4", len(entries))
+		}
+
+		// Verify entries implement fs.DirEntry
+		for _, entry := range entries {
+			if entry.Name() == "" {
+				t.Error("DirEntry has empty name")
+			}
+			info, err := entry.Info()
+			if err != nil {
+				t.Errorf("DirEntry.Info() failed: %v", err)
+			}
+			if info == nil {
+				t.Error("DirEntry.Info() returned nil")
+			}
+		}
+	})
+
+	t.Run("Filer.ReadFile", func(t *testing.T) {
+		filePath := path.Join(testDir, "readfile_test.txt")
+		content := []byte("test content for ReadFile")
+
+		// Create file
+		f, err := s.FS.Create(filePath)
+		if err != nil {
+			t.Fatalf("Create failed: %v", err)
+		}
+		f.Write(content)
+		f.Close()
+
+		// Test Filer.ReadFile
+		got, err := s.FS.ReadFile(filePath)
+		if err != nil {
+			t.Fatalf("Filer.ReadFile failed: %v", err)
+		}
+
+		if !bytes.Equal(got, content) {
+			t.Errorf("content mismatch: got %q, want %q", got, content)
+		}
+	})
+
+	t.Run("Filer.Sub", func(t *testing.T) {
+		// Create a directory structure
+		base := path.Join(testDir, "sub_test")
+		nested := path.Join(base, "nested")
+		s.FS.MkdirAll(nested, 0755)
+
+		// Create a file in the nested directory
+		filePath := path.Join(nested, "file.txt")
+		content := []byte("nested file content")
+		f, _ := s.FS.Create(filePath)
+		f.Write(content)
+		f.Close()
+
+		// Get sub filesystem rooted at base
+		subFS, err := s.FS.Sub(base)
+		if err != nil {
+			t.Fatalf("Filer.Sub failed: %v", err)
+		}
+
+		// Access file using relative path in sub filesystem
+		// Type assert to fs.ReadFileFS since Sub returns fs.FS
+		readFileFS, ok := subFS.(fs.ReadFileFS)
+		if !ok {
+			t.Fatal("Sub filesystem does not implement fs.ReadFileFS")
+		}
+		got, err := readFileFS.ReadFile("nested/file.txt")
+		if err != nil {
+			t.Fatalf("ReadFile in sub filesystem failed: %v", err)
+		}
+
+		if !bytes.Equal(got, content) {
+			t.Errorf("content mismatch in sub filesystem: got %q, want %q", got, content)
+		}
+
+		// Verify Sub returns error for non-directory
+		filePath2 := path.Join(testDir, "notadir.txt")
+		f2, _ := s.FS.Create(filePath2)
+		f2.Close()
+
+		_, err = s.FS.Sub(filePath2)
+		if err == nil {
+			t.Error("Sub on a file should return an error")
+		}
+	})
+
+	t.Run("Filer.Sub.Nested", func(t *testing.T) {
+		// Test nested Sub calls
+		base := path.Join(testDir, "nested_sub_test")
+		level1 := path.Join(base, "level1")
+		level2 := path.Join(level1, "level2")
+		s.FS.MkdirAll(level2, 0755)
+
+		// Create a file at level2
+		filePath := path.Join(level2, "deep.txt")
+		content := []byte("deep nested content")
+		f, _ := s.FS.Create(filePath)
+		f.Write(content)
+		f.Close()
+
+		// Get sub filesystem at base
+		sub1, err := s.FS.Sub(base)
+		if err != nil {
+			t.Fatalf("First Sub failed: %v", err)
+		}
+
+		// Get nested sub filesystem
+		// Type assert to fs.SubFS since Sub returns fs.FS
+		subFS1, ok := sub1.(fs.SubFS)
+		if !ok {
+			t.Fatal("Sub filesystem does not implement fs.SubFS")
+		}
+		sub2, err := subFS1.Sub("level1")
+		if err != nil {
+			t.Fatalf("Nested Sub failed: %v", err)
+		}
+
+		// Access file from nested sub
+		// Type assert to fs.ReadFileFS since Sub returns fs.FS
+		readFileFS2, ok := sub2.(fs.ReadFileFS)
+		if !ok {
+			t.Fatal("Nested sub filesystem does not implement fs.ReadFileFS")
+		}
+		got, err := readFileFS2.ReadFile("level2/deep.txt")
+		if err != nil {
+			t.Fatalf("ReadFile in nested sub failed: %v", err)
+		}
+
+		if !bytes.Equal(got, content) {
+			t.Errorf("content mismatch in nested sub: got %q, want %q", got, content)
+		}
+	})
+}
+
 // testSymlinks tests symbolic link operations.
 func (s *Suite) testSymlinks(t *testing.T, testDir string) {
 	t.Helper()
@@ -539,6 +714,428 @@ func (s *Suite) testSymlinks(t *testing.T, testDir string) {
 		}
 		if info.Mode()&os.ModeSymlink == 0 {
 			t.Error("Lstat should return symlink info")
+		}
+	})
+
+	t.Run("RelativeSymlink", func(t *testing.T) {
+		// Create directory structure for relative symlink
+		subdir := path.Join(testDir, "rel_sub")
+		if err := s.FS.MkdirAll(subdir, 0755); err != nil {
+			t.Fatalf("MkdirAll failed: %v", err)
+		}
+
+		target := path.Join(testDir, "rel_target.txt")
+		link := path.Join(subdir, "rel_link")
+
+		// Create target file
+		f, _ := s.FS.Create(target)
+		f.Write([]byte("relative target"))
+		f.Close()
+
+		// Create relative symlink (../rel_target.txt)
+		if err := sfs.Symlink("../rel_target.txt", link); err != nil {
+			t.Fatalf("Symlink with relative path failed: %v", err)
+		}
+
+		// Verify readlink returns the relative path
+		got, err := sfs.Readlink(link)
+		if err != nil {
+			t.Fatalf("Readlink failed: %v", err)
+		}
+		if got != "../rel_target.txt" {
+			t.Errorf("Readlink: got %q, want %q", got, "../rel_target.txt")
+		}
+	})
+
+	t.Run("SymlinkToDirectory", func(t *testing.T) {
+		targetDir := path.Join(testDir, "link_target_dir")
+		link := path.Join(testDir, "dir_link")
+
+		if err := s.FS.Mkdir(targetDir, 0755); err != nil {
+			t.Fatalf("Mkdir failed: %v", err)
+		}
+
+		// Create a file inside the target directory
+		f, _ := s.FS.Create(path.Join(targetDir, "file.txt"))
+		f.Write([]byte("content"))
+		f.Close()
+
+		// Create symlink to directory
+		if err := sfs.Symlink(targetDir, link); err != nil {
+			t.Fatalf("Symlink to directory failed: %v", err)
+		}
+
+		// Stat should follow and show it as a directory
+		info, err := s.FS.Stat(link)
+		if err != nil {
+			t.Fatalf("Stat on symlink to directory failed: %v", err)
+		}
+		if !info.IsDir() {
+			t.Error("Stat should show symlink-to-dir as directory")
+		}
+
+		// Lstat should show it as a symlink
+		info, err = sfs.Lstat(link)
+		if err != nil {
+			t.Fatalf("Lstat failed: %v", err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			t.Error("Lstat should show symlink mode")
+		}
+	})
+
+	t.Run("BrokenSymlink", func(t *testing.T) {
+		nonexistent := path.Join(testDir, "nonexistent_target")
+		link := path.Join(testDir, "broken_link")
+
+		// Create symlink to non-existent target
+		if err := sfs.Symlink(nonexistent, link); err != nil {
+			t.Fatalf("Symlink to non-existent target failed: %v", err)
+		}
+
+		// Readlink should still work
+		got, err := sfs.Readlink(link)
+		if err != nil {
+			t.Fatalf("Readlink on broken symlink failed: %v", err)
+		}
+		if got != nonexistent {
+			t.Errorf("Readlink: got %q, want %q", got, nonexistent)
+		}
+
+		// Lstat should work (returns info about the link itself)
+		info, err := sfs.Lstat(link)
+		if err != nil {
+			t.Fatalf("Lstat on broken symlink failed: %v", err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			t.Error("Lstat should show symlink mode for broken link")
+		}
+
+		// Stat should fail (tries to follow broken link)
+		_, err = s.FS.Stat(link)
+		if err == nil {
+			t.Error("Stat on broken symlink should fail")
+		}
+	})
+
+	t.Run("SymlinkAlreadyExists", func(t *testing.T) {
+		target := path.Join(testDir, "exists_target.txt")
+		link := path.Join(testDir, "exists_link")
+
+		f, _ := s.FS.Create(target)
+		f.Close()
+
+		// Create first symlink
+		if err := sfs.Symlink(target, link); err != nil {
+			t.Fatalf("First Symlink failed: %v", err)
+		}
+
+		// Try to create symlink at same location - should fail
+		err := sfs.Symlink(target, link)
+		if err == nil {
+			t.Error("Symlink to existing path should fail")
+		}
+	})
+
+	t.Run("CircularSymlinks", func(t *testing.T) {
+		// Create directory structure for circular symlinks
+		circDir := path.Join(testDir, "circular")
+		oneDir := path.Join(circDir, "one")
+		twoDir := path.Join(oneDir, "two")
+
+		if err := s.FS.MkdirAll(twoDir, 0755); err != nil {
+			t.Fatalf("MkdirAll failed: %v", err)
+		}
+
+		// Create symlink that points back up: /circular/one/two/three -> /circular/one
+		link := path.Join(twoDir, "three")
+		if err := sfs.Symlink(oneDir, link); err != nil {
+			t.Fatalf("Symlink failed: %v", err)
+		}
+
+		// Lstat should work on the symlink
+		info, err := sfs.Lstat(link)
+		if err != nil {
+			t.Fatalf("Lstat on circular symlink failed: %v", err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			t.Error("Lstat should show symlink mode")
+		}
+
+		// Readlink should return the target
+		got, err := sfs.Readlink(link)
+		if err != nil {
+			t.Fatalf("Readlink failed: %v", err)
+		}
+		if got != oneDir {
+			t.Errorf("Readlink: got %q, want %q", got, oneDir)
+		}
+	})
+
+	t.Run("SelfReferenceSymlink", func(t *testing.T) {
+		// Test self-referencing symlink (A -> A)
+		link := path.Join(testDir, "self_ref")
+		if err := sfs.Symlink(link, link); err != nil {
+			t.Fatalf("Symlink failed: %v", err)
+		}
+
+		// Lstat should work
+		info, err := sfs.Lstat(link)
+		if err != nil {
+			t.Fatalf("Lstat on self-referencing symlink failed: %v", err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			t.Error("Lstat should show symlink mode")
+		}
+
+		// Stat should fail (following the symlink creates infinite loop)
+		_, err = s.FS.Stat(link)
+		if err == nil {
+			t.Error("Stat on self-referencing symlink should fail")
+		}
+	})
+
+	t.Run("TwoNodeCycle", func(t *testing.T) {
+		// Test two-node cycle (A -> B -> A)
+		linkA := path.Join(testDir, "cycle_a")
+		linkB := path.Join(testDir, "cycle_b")
+
+		if err := sfs.Symlink(linkB, linkA); err != nil {
+			t.Fatalf("Symlink A -> B failed: %v", err)
+		}
+		if err := sfs.Symlink(linkA, linkB); err != nil {
+			t.Fatalf("Symlink B -> A failed: %v", err)
+		}
+
+		// Lstat should work on both
+		info, err := sfs.Lstat(linkA)
+		if err != nil {
+			t.Fatalf("Lstat on linkA failed: %v", err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			t.Error("Lstat on linkA should show symlink mode")
+		}
+
+		// Stat should fail (following creates infinite loop)
+		_, err = s.FS.Stat(linkA)
+		if err == nil {
+			t.Error("Stat on two-node cycle should fail")
+		}
+	})
+
+	t.Run("RemoveSymlink", func(t *testing.T) {
+		target := path.Join(testDir, "remove_target.txt")
+		link := path.Join(testDir, "remove_link")
+
+		f, _ := s.FS.Create(target)
+		f.Write([]byte("should not be deleted"))
+		f.Close()
+
+		if err := sfs.Symlink(target, link); err != nil {
+			t.Fatalf("Symlink failed: %v", err)
+		}
+
+		// Remove should delete the symlink, not the target
+		if err := s.FS.Remove(link); err != nil {
+			t.Fatalf("Remove symlink failed: %v", err)
+		}
+
+		// Symlink should be gone
+		_, err := sfs.Lstat(link)
+		if err == nil {
+			t.Error("Symlink should be removed")
+		}
+
+		// Target should still exist
+		_, err = s.FS.Stat(target)
+		if err != nil {
+			t.Error("Target file should still exist after removing symlink")
+		}
+	})
+
+	t.Run("ReadThroughSymlink", func(t *testing.T) {
+		target := path.Join(testDir, "read_through_target.txt")
+		link := path.Join(testDir, "read_through_link")
+		content := []byte("content read through symlink")
+
+		f, _ := s.FS.Create(target)
+		f.Write(content)
+		f.Close()
+
+		if err := sfs.Symlink(target, link); err != nil {
+			t.Fatalf("Symlink failed: %v", err)
+		}
+
+		// Open and read through symlink
+		f, err := s.FS.Open(link)
+		if err != nil {
+			t.Fatalf("Open through symlink failed: %v", err)
+		}
+		got, err := io.ReadAll(f)
+		f.Close()
+		if err != nil {
+			t.Fatalf("Read through symlink failed: %v", err)
+		}
+
+		if string(got) != string(content) {
+			t.Errorf("content mismatch: got %q, want %q", got, content)
+		}
+	})
+
+	t.Run("WriteThroughSymlink", func(t *testing.T) {
+		target := path.Join(testDir, "write_through_target.txt")
+		link := path.Join(testDir, "write_through_link")
+
+		f, _ := s.FS.Create(target)
+		f.Close()
+
+		if err := sfs.Symlink(target, link); err != nil {
+			t.Fatalf("Symlink failed: %v", err)
+		}
+
+		// Write through symlink
+		content := []byte("written through symlink")
+		f, err := s.FS.OpenFile(link, os.O_WRONLY, 0644)
+		if err != nil {
+			t.Fatalf("OpenFile through symlink failed: %v", err)
+		}
+		f.Write(content)
+		f.Close()
+
+		// Read from target to verify write went to target
+		f, _ = s.FS.Open(target)
+		got, _ := io.ReadAll(f)
+		f.Close()
+
+		if string(got) != string(content) {
+			t.Errorf("write did not go to target: got %q, want %q", got, content)
+		}
+	})
+
+	t.Run("ChainedSymlinks", func(t *testing.T) {
+		// Create: target <- link1 <- link2
+		target := path.Join(testDir, "chain_target.txt")
+		link1 := path.Join(testDir, "chain_link1")
+		link2 := path.Join(testDir, "chain_link2")
+		content := []byte("chained symlink content")
+
+		f, _ := s.FS.Create(target)
+		f.Write(content)
+		f.Close()
+
+		if err := sfs.Symlink(target, link1); err != nil {
+			t.Fatalf("Symlink link1 failed: %v", err)
+		}
+		if err := sfs.Symlink(link1, link2); err != nil {
+			t.Fatalf("Symlink link2 failed: %v", err)
+		}
+
+		// Lstat on link2 should show symlink
+		info, err := sfs.Lstat(link2)
+		if err != nil {
+			t.Fatalf("Lstat link2 failed: %v", err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			t.Error("Lstat should show link2 as symlink")
+		}
+
+		// Readlink on link2 should return link1
+		got, err := sfs.Readlink(link2)
+		if err != nil {
+			t.Fatalf("Readlink link2 failed: %v", err)
+		}
+		if got != link1 {
+			t.Errorf("Readlink link2: got %q, want %q", got, link1)
+		}
+
+		// Stat on link2 should follow chain to target (not a symlink)
+		info, err = s.FS.Stat(link2)
+		if err != nil {
+			t.Fatalf("Stat link2 failed: %v", err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			t.Error("Stat should follow chain and not show symlink")
+		}
+
+		// Read through chain should work
+		f, _ = s.FS.Open(link2)
+		data, _ := io.ReadAll(f)
+		f.Close()
+		if string(data) != string(content) {
+			t.Errorf("read through chain: got %q, want %q", data, content)
+		}
+	})
+
+	t.Run("RenameSymlink", func(t *testing.T) {
+		target := path.Join(testDir, "rename_sym_target.txt")
+		link := path.Join(testDir, "rename_sym_link")
+		newLink := path.Join(testDir, "rename_sym_link_new")
+
+		f, _ := s.FS.Create(target)
+		f.Write([]byte("rename symlink target"))
+		f.Close()
+
+		if err := sfs.Symlink(target, link); err != nil {
+			t.Fatalf("Symlink failed: %v", err)
+		}
+
+		// Rename the symlink
+		if err := s.FS.Rename(link, newLink); err != nil {
+			t.Fatalf("Rename symlink failed: %v", err)
+		}
+
+		// Old link should not exist
+		_, err := sfs.Lstat(link)
+		if err == nil {
+			t.Error("Old symlink should not exist")
+		}
+
+		// New link should exist and be a symlink
+		info, err := sfs.Lstat(newLink)
+		if err != nil {
+			t.Fatalf("Lstat new link failed: %v", err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			t.Error("Renamed link should still be a symlink")
+		}
+
+		// Target should still exist
+		_, err = s.FS.Stat(target)
+		if err != nil {
+			t.Error("Target should still exist after renaming symlink")
+		}
+	})
+
+	t.Run("SameDirRelativeSymlink", func(t *testing.T) {
+		// Same-directory relative symlink (simpler than ../)
+		target := path.Join(testDir, "same_dir_target.txt")
+		link := path.Join(testDir, "same_dir_link")
+
+		f, _ := s.FS.Create(target)
+		f.Write([]byte("same dir target"))
+		f.Close()
+
+		// Create symlink with just the filename (same directory)
+		if err := sfs.Symlink("same_dir_target.txt", link); err != nil {
+			t.Fatalf("Symlink with same-dir relative path failed: %v", err)
+		}
+
+		// Readlink should return the relative path
+		got, err := sfs.Readlink(link)
+		if err != nil {
+			t.Fatalf("Readlink failed: %v", err)
+		}
+		if got != "same_dir_target.txt" {
+			t.Errorf("Readlink: got %q, want %q", got, "same_dir_target.txt")
+		}
+
+		// Stat should resolve and find the target
+		info, err := s.FS.Stat(link)
+		if err != nil {
+			t.Fatalf("Stat through same-dir symlink failed: %v", err)
+		}
+		if info.IsDir() {
+			t.Error("Should resolve to file, not directory")
 		}
 	})
 }
