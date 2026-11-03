@@ -47,18 +47,27 @@ func (s *Suite) Run(t *testing.T) {
 // with known limitations. Each pattern follows the rules documented on Skip:
 // matching is case-insensitive, "Symlinks/Lstat" names exactly one subtest,
 // "Lstat" matches that name at any depth, and "Symlinks" skips the whole
-// group. The patterns are added to s.Skips, and every subtest they select is
-// skipped with a t.Skip message naming the subtest and the pattern. To record
-// why each subtest is skipped, set s.Skips instead.
+// group. Patterns are relative to t: when the suite runs inside a subtest,
+// leave that subtest's name out of the pattern. The patterns are applied in
+// addition to s.Skips for this run only; s.Skips itself is not modified.
+// Every subtest they select is skipped with a t.Skip message naming the
+// subtest and the pattern. To record why each subtest is skipped, set s.Skips
+// instead.
 //
 // An empty or malformed pattern fails the test before any subtest runs.
 func (s *Suite) RunWithSkips(t *testing.T, skips ...string) {
 	t.Helper()
+	s.runWithSkips(realT{t}, skips)
+}
+
+// runWithSkips is the body of RunWithSkips.
+func (s *Suite) runWithSkips(t tb, patterns []string) {
+	t.Helper()
 	all := append([]Skip(nil), s.Skips...)
-	for _, p := range skips {
+	for _, p := range patterns {
 		all = append(all, Skip{Pattern: p, Reason: runWithSkipsReason})
 	}
-	s.run(realT{t}, all)
+	s.run(t, all)
 }
 
 // run is the body of Run and RunWithSkips.
@@ -70,7 +79,6 @@ func (s *Suite) run(root tb, skips []Skip) {
 		root.Fatal(err)
 	}
 	t := skipT{tb: root, rules: rules}
-	defer logUnmatched(root, rules)
 
 	// Set up test directory
 	testDir := s.TestDir
@@ -88,6 +96,10 @@ func (s *Suite) run(root tb, skips []Skip) {
 			s.FS.RemoveAll(testDir)
 		})
 	}
+
+	// Report unmatched patterns only once subtests can have run, so a setup
+	// failure is not mistaken for typos in the patterns.
+	defer logUnmatched(root, rules)
 
 	// Run test groups
 	t.Run("FileOperations", func(t tb) {
@@ -1160,7 +1172,19 @@ func (s *Suite) quickCheck(t tb) {
 // writeFile creates p holding content, failing the test on any error.
 func (s *Suite) writeFile(t tb, p string, content []byte) {
 	t.Helper()
-	f, err := s.FS.Create(p)
+	writeFile(t, s.FS, p, content)
+}
+
+// readFile opens p and returns its contents, failing the test on any error.
+func (s *Suite) readFile(t tb, p string) []byte {
+	t.Helper()
+	return readFile(t, s.FS, p)
+}
+
+// writeFile creates p in fsys holding content, failing the test on any error.
+func writeFile(t tb, fsys absfs.FileSystem, p string, content []byte) {
+	t.Helper()
+	f, err := fsys.Create(p)
 	if err != nil {
 		t.Fatalf("Create %s failed: %v", p, err)
 	}
@@ -1180,10 +1204,11 @@ func (s *Suite) writeFile(t tb, p string, content []byte) {
 	}
 }
 
-// readFile opens p and returns its contents, failing the test on any error.
-func (s *Suite) readFile(t tb, p string) []byte {
+// readFile opens p in fsys and returns its contents, failing the test on any
+// error.
+func readFile(t tb, fsys absfs.FileSystem, p string) []byte {
 	t.Helper()
-	f, err := s.FS.Open(p)
+	f, err := fsys.Open(p)
 	if err != nil {
 		t.Fatalf("Open %s failed: %v", p, err)
 	}

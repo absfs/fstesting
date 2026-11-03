@@ -168,8 +168,8 @@ suite := &fstesting.Suite{
 suite.Run(t)
 ```
 
-`RunWithSkips` takes the same patterns without reasons and adds them to
-`Suite.Skips` for that run:
+`RunWithSkips` takes the same patterns without reasons and applies them in
+addition to `Suite.Skips` for that run only; `Suite.Skips` is not modified:
 
 ```go
 suite.RunWithSkips(t, "Symlinks/Lstat", "PathHandling/Unicode")
@@ -193,12 +193,25 @@ Pattern rules:
 | `Symlinks/*Cycle` | Symlinks subtests whose names end in `Cycle`                     |
 | `CreateAndRead`   | both `FileOperations/CreateAndRead` and `Symlinks/CreateAndRead` |
 
-- Names are the ones `go test -v` prints after the top-level test name.
+- Names are relative to the `*testing.T` passed to `Run` or `RunWithSkips`:
+  they are what `go test -v` prints after that test's full name. When the
+  suite runs inside a subtest, leave the subtest out of the pattern:
+
+  ```go
+  t.Run("memfs", func(t *testing.T) {
+      // Prints as TestMyFS/memfs/Symlinks/Lstat; the pattern is still
+      // "Symlinks/Lstat", not "memfs/Symlinks/Lstat".
+      suite.RunWithSkips(t, "Symlinks/Lstat")
+  })
+  ```
 - Matching is case-insensitive and uses `path.Match` syntax; `*` never
   crosses a `/`.
 - An empty or malformed pattern fails the test before any subtest runs.
 - A pattern that matches nothing is logged (`t.Logf`), not failed, since a
   disabled feature group or a `-run` filter can legitimately hide its target.
+  The log names the test the pattern is relative to, and suggests dropping a
+  leading part that repeats that test's own name. A path pattern below a
+  skipped group, or one that duplicates an earlier pattern, counts as matched.
 
 ## Quick Check
 

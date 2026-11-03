@@ -103,21 +103,10 @@ func (s *WrapperSuite) testPassthrough(t tb, wrapper absfs.FileSystem, testDir s
 	filePath := path.Join(testDir, "passthrough.txt")
 	content := []byte("passthrough test content")
 
-	f, err := wrapper.Create(filePath)
-	if err != nil {
-		t.Fatalf("Create failed: %v", err)
-	}
-	f.Write(content)
-	f.Close()
+	writeFile(t, wrapper, filePath, content)
 
 	// Read back through wrapper
-	f, err = wrapper.Open(filePath)
-	if err != nil {
-		t.Fatalf("Open failed: %v", err)
-	}
-	got, _ := io.ReadAll(f)
-	f.Close()
-
+	got := readFile(t, wrapper, filePath)
 	if !bytes.Equal(got, content) {
 		t.Errorf("content mismatch: got %d bytes, want %d bytes", len(got), len(content))
 	}
@@ -173,7 +162,9 @@ func (s *WrapperSuite) testDataIntegrity(t tb, wrapper absfs.FileSystem, testDir
 			if n != len(tc.content) {
 				t.Errorf("Write returned %d, want %d", n, len(tc.content))
 			}
-			f.Close()
+			if err := f.Close(); err != nil {
+				t.Fatalf("Close failed: %v", err)
+			}
 
 			// Read
 			f, err = wrapper.Open(filePath)
@@ -229,20 +220,10 @@ func (s *WrapperSuite) testTransformRoundtrip(t tb, wrapper absfs.FileSystem, te
 	content := bytes.Repeat([]byte("compressible data pattern "), 1000)
 
 	// Write through wrapper
-	f, err := wrapper.Create(filePath)
-	if err != nil {
-		t.Fatalf("Create failed: %v", err)
-	}
-	f.Write(content)
-	f.Close()
+	writeFile(t, wrapper, filePath, content)
 
 	// Read back through wrapper - should get original data
-	f, err = wrapper.Open(filePath)
-	if err != nil {
-		t.Fatalf("Open failed: %v", err)
-	}
-	got, _ := io.ReadAll(f)
-	f.Close()
+	got := readFile(t, wrapper, filePath)
 
 	if !bytes.Equal(got, content) {
 		t.Errorf("roundtrip failed: got %d bytes, want %d bytes", len(got), len(content))

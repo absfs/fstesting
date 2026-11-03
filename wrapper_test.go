@@ -82,18 +82,18 @@ func TestWrapperSuiteFailures(t *testing.T) {
 			f.fail = failOps("Create")
 			return f
 		}, map[string]string{
-			"Passthrough":         "Create failed",
+			"Passthrough":         "Create /w/wrapper_test/passthrough.txt failed",
 			"DataIntegrity/small": "Create failed",
-			"TransformRoundtrip":  "Create failed",
+			"TransformRoundtrip":  "Create /w/wrapper_test/transform.bin failed",
 		}},
 		{"open", false, func(t *testing.T) absfs.FileSystem {
 			f := newFaultFS(t)
 			f.fail = failOps("Open")
 			return f
 		}, map[string]string{
-			"Passthrough":         "Open failed",
+			"Passthrough":         "Open /w/wrapper_test/passthrough.txt failed",
 			"DataIntegrity/small": "Open failed",
-			"TransformRoundtrip":  "Open failed",
+			"TransformRoundtrip":  "Open /w/wrapper_test/transform.bin failed",
 		}},
 		{"stat", false, func(t *testing.T) absfs.FileSystem {
 			f := newFaultFS(t)
@@ -107,10 +107,25 @@ func TestWrapperSuiteFailures(t *testing.T) {
 		}, map[string]string{"Passthrough": "Remove failed"}},
 		{"write", false, func(t *testing.T) absfs.FileSystem {
 			return &badFileFS{faultFS: newFaultFS(t), mode: "write"}
-		}, map[string]string{"DataIntegrity/small": "Write failed"}},
+		}, map[string]string{
+			"Passthrough":         "Write /w/wrapper_test/passthrough.txt failed",
+			"DataIntegrity/small": "Write failed",
+			"TransformRoundtrip":  "Write /w/wrapper_test/transform.bin failed",
+		}},
+		{"close", false, func(t *testing.T) absfs.FileSystem {
+			return &badFileFS{faultFS: newFaultFS(t), mode: "close"}
+		}, map[string]string{
+			"Passthrough":         "Close /w/wrapper_test/passthrough.txt failed",
+			"DataIntegrity/small": "Close failed",
+			"TransformRoundtrip":  "Close /w/wrapper_test/transform.bin failed",
+		}},
 		{"read", false, func(t *testing.T) absfs.FileSystem {
 			return &badFileFS{faultFS: newFaultFS(t), mode: "read"}
-		}, map[string]string{"DataIntegrity/small": "ReadAll failed"}},
+		}, map[string]string{
+			"Passthrough":         "Read /w/wrapper_test/passthrough.txt failed",
+			"DataIntegrity/small": "ReadAll failed",
+			"TransformRoundtrip":  "Read /w/wrapper_test/transform.bin failed",
+		}},
 		{"lie", false, func(t *testing.T) absfs.FileSystem {
 			f := newFaultFS(t)
 			f.lie = true
@@ -133,6 +148,7 @@ func TestWrapperSuiteFailures(t *testing.T) {
 				BaseFS:         tt.base(t),
 				ReadOnly:       tt.readOnly,
 				TransformsData: true,
+				TestDir:        "/w",
 			}
 			root := runFake(func(t tb) { s.run(t) })
 			root.assertNoPanic(t)

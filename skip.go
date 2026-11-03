@@ -3,6 +3,7 @@ package fstesting
 import (
 	"fmt"
 	"path"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -11,9 +12,14 @@ import (
 // Skip selects suite subtests to skip and records why.
 //
 // Pattern is matched case-insensitively against subtest names exactly as the
-// suite spells them, which is also how `go test -v` prints them, minus the name
-// of the test function that called Run. Matching uses [path.Match] syntax
-// ('*', '?', '[...]'), and '*' never crosses a '/':
+// suite spells them. Names are relative to the *testing.T passed to Run or
+// RunWithSkips: in `go test -v` output they are the part after that test's
+// full name. When Run is called directly from TestMyFS, Symlinks/Lstat prints
+// as TestMyFS/Symlinks/Lstat and the pattern is "Symlinks/Lstat". When Run is
+// called inside a subtest, for example t.Run("memfs", ...), the test prints as
+// TestMyFS/memfs/Symlinks/Lstat and the pattern is still "Symlinks/Lstat", not
+// "memfs/Symlinks/Lstat". Matching uses [path.Match] syntax ('*', '?',
+// '[...]'), and '*' never crosses a '/':
 //
 //   - A pattern containing '/' is matched against the subtest's full path below
 //     the suite root, e.g. "Symlinks/Lstat" or "Symlinks/*Symlink".
@@ -113,31 +119,85 @@ func (s skipT) Run(name string, f func(t tb)) bool {
 		rel = s.rel + "/" + name
 	}
 	return s.tb.Run(name, func(t tb) {
-		child := skipT{tb: t, rules: s.rules, rel: rel}
+		var first *skipRule
 		for _, r := range s.rules {
 			if !r.matches(rel, name) {
 				continue
 			}
 			r.matched.Add(1)
-			reason := r.Reason
-			if reason == "" {
-				reason = "no reason given"
+			if first == nil {
+				first = r
 			}
-			t.Skip(fmt.Sprintf("fstesting: skipping %s (skip pattern %q): %s", rel, r.Pattern, reason))
+		}
+		if first == nil {
+			f(skipT{tb: t, rules: s.rules, rel: rel})
 			return
 		}
-		f(child)
+		// Skipping rel also skips everything below it, so path patterns that
+		// select a descendant are satisfied too; credit them so they are not
+		// reported as unmatched.
+		for _, r := range s.rules {
+			if r.below(rel) {
+				r.matched.Add(1)
+			}
+		}
+		reason := first.Reason
+		if reason == "" {
+			reason = "no reason given"
+		}
+		t.Skip(fmt.Sprintf("fstesting: skipping %s (skip pattern %q): %s", rel, first.Pattern, reason))
 	})
 }
 
-// logUnmatched reports skip patterns that selected nothing, which usually
-// means a typo or a renamed subtest. It is a log line, not a failure: a
-// pattern may legitimately match nothing when its group is disabled by
-// Features or filtered out by -run.
-func logUnmatched(t tb, rules []*skipRule) {
-	for _, r := range rules {
-		if r.matched.Load() == 0 {
-			t.Logf("fstesting: skip pattern %q matched no subtest", r.Pattern)
+// below reports whether r is a path pattern whose leading elements match rel,
+// so that it selects only subtests below rel.
+func (r *skipRule) below(rel string) bool {
+	if !r.full {
+		return false
+	}
+	pat := strings.Split(r.lower, "/")
+	elems := strings.Split(strings.ToLower(rel), "/")
+	if len(pat) <= len(elems) {
+		return false
+	}
+	for i, e := range elems {
+		if ok, _ := path.Match(pat[i], e); !ok {
+			return false
 		}
 	}
+	return true
+}
+
+// logUnmatched reports skip patterns that selected nothing, which usually
+// means a typo, a renamed subtest, or a pattern written relative to the wrong
+// test. It is a log line, not a failure: a pattern may legitimately match
+// nothing when its group is disabled by Features or filtered out by -run.
+func logUnmatched(t tb, rules []*skipRule) {
+	t.Helper()
+	for _, r := range rules {
+		if r.matched.Load() != 0 {
+			continue
+		}
+		msg := fmt.Sprintf("fstesting: skip pattern %q matched no subtest of %s (patterns are relative to that test)", r.Pattern, t.Name())
+		if prefix, ok := parentPrefix(t.Name(), r.Pattern); ok {
+			msg += fmt.Sprintf("; drop the leading %q", prefix)
+		}
+		t.Logf("%s", msg)
+	}
+}
+
+// parentPrefix reports whether pattern begins with trailing elements of the
+// root test name, the mistake of copying a subtest name from `go test -v`
+// output when the suite runs inside a subtest. It returns the prefix to drop.
+func parentPrefix(rootName, pattern string) (string, bool) {
+	names := strings.Split(strings.ToLower(rootName), "/")
+	pat := strings.Split(strings.ToLower(pattern), "/")
+	for i := range names {
+		tail := names[i:]
+		if len(tail) >= len(pat) || !slices.Equal(tail, pat[:len(tail)]) {
+			continue
+		}
+		return strings.Join(strings.Split(pattern, "/")[:len(tail)], "/") + "/", true
+	}
+	return "", false
 }

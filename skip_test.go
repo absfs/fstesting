@@ -230,3 +230,107 @@ func TestHelperProcess(t *testing.T) {
 		t.Skip("helper process only")
 	}
 }
+
+// TestRunWithSkipsSkipsPatterns drives the RunWithSkips path in process, so a
+// regression to ignoring the patterns fails here and not only in the child
+// process test.
+func TestRunWithSkipsSkipsPatterns(t *testing.T) {
+	s := memSuite(t)
+	s.Skips = []Skip{{Pattern: "Timestamps", Reason: "no clock"}}
+	root := runFake(func(t tb) { s.runWithSkips(t, []string{"Symlinks/Lstat", "PathHandling/Unicode"}) })
+	root.assertNoPanic(t)
+
+	got := strings.Join(skippedNames(root), ",")
+	if want := "PathHandling/Unicode,Symlinks/Lstat,Timestamps"; got != want {
+		t.Errorf("skipped %s, want %s", got, want)
+	}
+	if msg := root.mustFind(t, "Symlinks/Lstat").skipMsg; !strings.Contains(msg, runWithSkipsReason) {
+		t.Errorf("skip message %q lacks %q", msg, runWithSkipsReason)
+	}
+	if c := root.mustFind(t, "Symlinks/CreateAndRead"); c.skipped || c.failed {
+		t.Errorf("sibling Symlinks/CreateAndRead skipped=%v failed=%v", c.skipped, c.failed)
+	}
+	if len(s.Skips) != 1 {
+		t.Errorf("runWithSkips modified s.Skips: %v", s.Skips)
+	}
+}
+
+// TestShadowedSkipPatternsAreNotLogged checks that a pattern whose subtest
+// was skipped by an earlier rule, either a duplicate or an enclosing group, is
+// not reported as matching nothing.
+func TestShadowedSkipPatternsAreNotLogged(t *testing.T) {
+	s := memSuite(t)
+	skips := []Skip{
+		{Pattern: "FileOperations/CreateAndRead", Reason: "r"},
+		{Pattern: "fileoperations/createandread"},
+		{Pattern: "Symlinks"},
+		{Pattern: "Symlinks/Lstat"},
+		{Pattern: "Symlinks/*Symlink"},
+		{Pattern: "Symlinks/Nope/Deeper"},
+		{Pattern: "Timestamps/NoSuchTest"},
+	}
+	root := runFake(func(t tb) { s.run(t, skips) })
+
+	if got := strings.Join(skippedNames(root), ","); got != "FileOperations/CreateAndRead,Symlinks" {
+		t.Errorf("skipped %s", got)
+	}
+	logs := strings.Join(root.logs, "\n")
+	if strings.Count(logs, "matched no subtest") != 1 || !strings.Contains(logs, `"Timestamps/NoSuchTest"`) {
+		t.Errorf("want only Timestamps/NoSuchTest logged as unmatched, got %q", logs)
+	}
+}
+
+// TestNestedSuiteSkipPatterns covers a suite run inside a subtest: patterns
+// are relative to that subtest, and a pattern that repeats its name is
+// reported with a hint to drop the prefix.
+func TestNestedSuiteSkipPatterns(t *testing.T) {
+	s := memSuite(t)
+	root := &fakeT{name: "TestMyFS/memfs"}
+	root.exec(func(t tb) { s.runWithSkips(t, []string{"Symlinks/Lstat", "memfs/Symlinks/RelativeSymlink"}) })
+
+	if !root.mustFind(t, "Symlinks/Lstat").skipped {
+		t.Error("Symlinks/Lstat was not skipped")
+	}
+	if root.mustFind(t, "Symlinks/RelativeSymlink").skipped {
+		t.Error("Symlinks/RelativeSymlink was skipped by a pattern naming the parent test")
+	}
+	want := `fstesting: skip pattern "memfs/Symlinks/RelativeSymlink" matched no subtest of TestMyFS/memfs (patterns are relative to that test); drop the leading "memfs/"`
+	if logs := strings.Join(root.logs, "\n"); logs != want {
+		t.Errorf("logs = %q, want %q", logs, want)
+	}
+}
+
+func TestParentPrefix(t *testing.T) {
+	tests := []struct {
+		root, pattern, want string
+		ok                  bool
+	}{
+		{"TestMyFS/memfs", "memfs/Symlinks/Lstat", "memfs/", true},
+		{"TestMyFS/memfs", "TestMyFS/memfs/Symlinks/Lstat", "TestMyFS/memfs/", true},
+		{"TestMyFS/MemFS", "memfs/Symlinks/Lstat", "memfs/", true},
+		{"TestMyFS", "Symlinks/Lstat", "", false},
+		{"TestMyFS/memfs", "memfs", "", false},
+		{"TestMyFS/memfs", "Lstat", "", false},
+	}
+	for _, tt := range tests {
+		got, ok := parentPrefix(tt.root, tt.pattern)
+		if got != tt.want || ok != tt.ok {
+			t.Errorf("parentPrefix(%q, %q) = %q, %v; want %q, %v", tt.root, tt.pattern, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
+// TestSetupFailureDoesNotLogUnmatched checks that when the test directory
+// cannot be created, the skip patterns are not misreported as typos.
+func TestSetupFailureDoesNotLogUnmatched(t *testing.T) {
+	f := newFaultFS(t)
+	f.fail = failOps("MkdirAll")
+	s := &Suite{FS: f, Features: DefaultFeatures()}
+	root := runFake(func(t tb) { s.run(t, []Skip{{Pattern: "Symlinks/Lstat"}}) })
+	if !root.failed {
+		t.Fatal("suite did not fail")
+	}
+	if logs := strings.Join(root.logs, "\n"); strings.Contains(logs, "matched no subtest") {
+		t.Errorf("setup failure logged unmatched patterns: %q", logs)
+	}
+}
