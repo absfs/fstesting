@@ -42,6 +42,11 @@ type WrapperSuite struct {
 // Run executes all wrapper tests.
 func (s *WrapperSuite) Run(t *testing.T) {
 	t.Helper()
+	s.run(realT{t})
+}
+
+func (s *WrapperSuite) run(t tb) {
+	t.Helper()
 
 	if s.BaseFS == nil {
 		t.Fatal("WrapperSuite requires BaseFS to be set")
@@ -65,29 +70,29 @@ func (s *WrapperSuite) Run(t *testing.T) {
 		wrapper.RemoveAll(testDir)
 	})
 
-	t.Run("Passthrough", func(t *testing.T) {
+	t.Run("Passthrough", func(t tb) {
 		s.testPassthrough(t, wrapper, testDir)
 	})
 
-	t.Run("DataIntegrity", func(t *testing.T) {
+	t.Run("DataIntegrity", func(t tb) {
 		s.testDataIntegrity(t, wrapper, testDir)
 	})
 
 	if s.ReadOnly {
-		t.Run("WriteBlocking", func(t *testing.T) {
+		t.Run("WriteBlocking", func(t tb) {
 			s.testWriteBlocking(t, wrapper, testDir)
 		})
 	}
 
 	if s.TransformsData {
-		t.Run("TransformRoundtrip", func(t *testing.T) {
+		t.Run("TransformRoundtrip", func(t tb) {
 			s.testTransformRoundtrip(t, wrapper, testDir)
 		})
 	}
 }
 
 // testPassthrough verifies basic operations work through the wrapper.
-func (s *WrapperSuite) testPassthrough(t *testing.T, wrapper absfs.FileSystem, testDir string) {
+func (s *WrapperSuite) testPassthrough(t tb, wrapper absfs.FileSystem, testDir string) {
 	t.Helper()
 
 	if s.ReadOnly {
@@ -133,7 +138,7 @@ func (s *WrapperSuite) testPassthrough(t *testing.T, wrapper absfs.FileSystem, t
 }
 
 // testDataIntegrity verifies data survives write/read cycle.
-func (s *WrapperSuite) testDataIntegrity(t *testing.T, wrapper absfs.FileSystem, testDir string) {
+func (s *WrapperSuite) testDataIntegrity(t tb, wrapper absfs.FileSystem, testDir string) {
 	t.Helper()
 
 	if s.ReadOnly {
@@ -152,7 +157,7 @@ func (s *WrapperSuite) testDataIntegrity(t *testing.T, wrapper absfs.FileSystem,
 	}
 
 	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tc.name, func(t tb) {
 			filePath := path.Join(testDir, "integrity_"+tc.name+".bin")
 
 			// Write
@@ -192,7 +197,7 @@ func (s *WrapperSuite) testDataIntegrity(t *testing.T, wrapper absfs.FileSystem,
 }
 
 // testWriteBlocking verifies that write operations fail for read-only wrappers.
-func (s *WrapperSuite) testWriteBlocking(t *testing.T, wrapper absfs.FileSystem, testDir string) {
+func (s *WrapperSuite) testWriteBlocking(t tb, wrapper absfs.FileSystem, testDir string) {
 	t.Helper()
 
 	filePath := path.Join(testDir, "writeblock.txt")
@@ -217,7 +222,7 @@ func (s *WrapperSuite) testWriteBlocking(t *testing.T, wrapper absfs.FileSystem,
 }
 
 // testTransformRoundtrip verifies data survives transformation.
-func (s *WrapperSuite) testTransformRoundtrip(t *testing.T, wrapper absfs.FileSystem, testDir string) {
+func (s *WrapperSuite) testTransformRoundtrip(t tb, wrapper absfs.FileSystem, testDir string) {
 	t.Helper()
 
 	filePath := path.Join(testDir, "transform.bin")
@@ -264,32 +269,37 @@ func FuzzWrapperRoundtrip(f *testing.F, factory func(absfs.FileSystem) (absfs.Fi
 	counter := 0
 	f.Fuzz(func(t *testing.T, data []byte) {
 		counter++
-		filePath := path.Join(testDir, "fuzz_wrapper", string(rune('a'+counter%26))+".bin")
-		wrapper.MkdirAll(path.Dir(filePath), 0755)
-
-		// Write
-		file, err := wrapper.Create(filePath)
-		if err != nil {
-			return
-		}
-		file.Write(data)
-		file.Close()
-
-		// Read back
-		file, err = wrapper.Open(filePath)
-		if err != nil {
-			t.Fatalf("Open failed after successful Create: %v", err)
-		}
-		got, err := io.ReadAll(file)
-		file.Close()
-		if err != nil {
-			t.Fatalf("ReadAll failed: %v", err)
-		}
-
-		if !bytes.Equal(got, data) {
-			t.Errorf("roundtrip failed: wrote %d bytes, got %d bytes", len(data), len(got))
-		}
-
-		wrapper.Remove(filePath)
+		fuzzWrapperRoundtripCase(realT{t}, wrapper, testDir, counter, data)
 	})
+}
+
+// fuzzWrapperRoundtripCase is one FuzzWrapperRoundtrip iteration.
+func fuzzWrapperRoundtripCase(t tb, wrapper absfs.FileSystem, testDir string, counter int, data []byte) {
+	filePath := path.Join(testDir, "fuzz_wrapper", string(rune('a'+counter%26))+".bin")
+	wrapper.MkdirAll(path.Dir(filePath), 0755)
+
+	// Write
+	file, err := wrapper.Create(filePath)
+	if err != nil {
+		return
+	}
+	file.Write(data)
+	file.Close()
+
+	// Read back
+	file, err = wrapper.Open(filePath)
+	if err != nil {
+		t.Fatalf("Open failed after successful Create: %v", err)
+	}
+	got, err := io.ReadAll(file)
+	file.Close()
+	if err != nil {
+		t.Fatalf("ReadAll failed: %v", err)
+	}
+
+	if !bytes.Equal(got, data) {
+		t.Errorf("roundtrip failed: wrote %d bytes, got %d bytes", len(data), len(got))
+	}
+
+	wrapper.Remove(filePath)
 }

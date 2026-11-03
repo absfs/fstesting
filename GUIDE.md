@@ -5,6 +5,7 @@
 - [Basic Usage](#basic-usage)
 - [Feature Configuration](#feature-configuration)
 - [Test Categories](#test-categories)
+- [Skipping Subtests](#skipping-subtests)
 - [Quick Check](#quick-check)
 - [Wrapper Testing](#wrapper-testing)
 - [Fuzz Testing](#fuzz-testing)
@@ -149,6 +150,56 @@ Symbolic link operations:
 
 - **Chtimes** - Modify access/modification times
 
+## Skipping Subtests
+
+When a filesystem has a known limitation that a feature flag is too coarse
+for, skip the individual subtests instead of filtering with `-test.skip` in a
+`TestMain`. Set `Suite.Skips` so each skip carries its reason:
+
+```go
+suite := &fstesting.Suite{
+    FS:       fs,
+    Features: fstesting.DefaultFeatures(),
+    Skips: []fstesting.Skip{
+        {Pattern: "Symlinks/Lstat", Reason: "route rewrites symlink targets"},
+        {Pattern: "PathHandling/Unicode", Reason: "backend is ASCII-only"},
+    },
+}
+suite.Run(t)
+```
+
+`RunWithSkips` takes the same patterns without reasons and adds them to
+`Suite.Skips` for that run:
+
+```go
+suite.RunWithSkips(t, "Symlinks/Lstat", "PathHandling/Unicode")
+```
+
+Each skipped subtest calls `t.Skip`, so `go test -v` reports it as `SKIP` with
+the subtest, the pattern that matched, and the reason:
+
+```
+--- SKIP: TestMyFS/Symlinks/Lstat (0.00s)
+    fstesting: skipping Symlinks/Lstat (skip pattern "Symlinks/Lstat"): route rewrites symlink targets
+```
+
+Pattern rules:
+
+| Pattern           | Skips                                                            |
+| ----------------- | ---------------------------------------------------------------- |
+| `Symlinks/Lstat`  | exactly that subtest (a `/` means: match the full path)          |
+| `Lstat`           | every subtest named `Lstat`, at any depth                        |
+| `Symlinks`        | the whole Symlinks group                                         |
+| `Symlinks/*Cycle` | Symlinks subtests whose names end in `Cycle`                     |
+| `CreateAndRead`   | both `FileOperations/CreateAndRead` and `Symlinks/CreateAndRead` |
+
+- Names are the ones `go test -v` prints after the top-level test name.
+- Matching is case-insensitive and uses `path.Match` syntax; `*` never
+  crosses a `/`.
+- An empty or malformed pattern fails the test before any subtest runs.
+- A pattern that matches nothing is logged (`t.Logf`), not failed, since a
+  disabled feature group or a `-run` filter can legitimately hide its target.
+
 ## Quick Check
 
 For fast iteration during development:
@@ -196,15 +247,15 @@ func TestCompressWrapper(t *testing.T) {
 
 ### WrapperSuite Fields
 
-| Field | Description |
-|-------|-------------|
-| `Factory` | Function to create wrapper around base filesystem |
-| `BaseFS` | The underlying filesystem to wrap |
-| `Name` | Descriptive name for test output |
-| `TransformsData` | True if wrapper modifies file contents |
-| `TransformsMeta` | True if wrapper modifies metadata |
-| `ReadOnly` | True if wrapper blocks write operations |
-| `TestDir` | Custom test directory (optional) |
+| Field            | Description                                       |
+| ---------------- | ------------------------------------------------- |
+| `Factory`        | Function to create wrapper around base filesystem |
+| `BaseFS`         | The underlying filesystem to wrap                 |
+| `Name`           | Descriptive name for test output                  |
+| `TransformsData` | True if wrapper modifies file contents            |
+| `TransformsMeta` | True if wrapper modifies metadata                 |
+| `ReadOnly`       | True if wrapper blocks write operations           |
+| `TestDir`        | Custom test directory (optional)                  |
 
 ### Wrapper Test Categories
 
@@ -229,14 +280,14 @@ func FuzzMyFS_ReadWrite(f *testing.F) {
 
 ### Available Fuzz Tests
 
-| Function | Tests |
-|----------|-------|
-| `FuzzCreate` | File creation with arbitrary paths |
-| `FuzzReadWrite` | Data integrity through write/read cycles |
-| `FuzzRename` | Rename operations with arbitrary paths |
-| `FuzzMkdir` | Directory creation with arbitrary paths |
-| `FuzzPathTraversal` | Path traversal attack resistance |
-| `FuzzOpenFlags` | OpenFile with various flag combinations |
+| Function            | Tests                                    |
+| ------------------- | ---------------------------------------- |
+| `FuzzCreate`        | File creation with arbitrary paths       |
+| `FuzzReadWrite`     | Data integrity through write/read cycles |
+| `FuzzRename`        | Rename operations with arbitrary paths   |
+| `FuzzMkdir`         | Directory creation with arbitrary paths  |
+| `FuzzPathTraversal` | Path traversal attack resistance         |
+| `FuzzOpenFlags`     | OpenFile with various flag combinations  |
 
 ### Running Fuzz Tests
 
@@ -291,13 +342,13 @@ suite := &fstesting.Suite{
 
 The package recognizes different types of absfs packages:
 
-| Type | Description | Examples |
-|------|-------------|----------|
-| Core | Interface definitions | absfs |
-| Implementation | Complete filesystem implementations | memfs, osfs, boltfs |
-| Adapter | Bridge to external systems | httpfs, s3fs, sftpfs |
-| Wrapper | Modify behavior of underlying fs | compressfs, encryptfs, cachefs |
-| Compositor | Combine multiple filesystems | unionfs, switchfs |
-| Consumer | Use filesystems for specific purposes | ioutil, fstools |
+| Type           | Description                           | Examples                       |
+| -------------- | ------------------------------------- | ------------------------------ |
+| Core           | Interface definitions                 | absfs                          |
+| Implementation | Complete filesystem implementations   | memfs, osfs, boltfs            |
+| Adapter        | Bridge to external systems            | httpfs, s3fs, sftpfs           |
+| Wrapper        | Modify behavior of underlying fs      | compressfs, encryptfs, cachefs |
+| Compositor     | Combine multiple filesystems          | unionfs, switchfs              |
+| Consumer       | Use filesystems for specific purposes | ioutil, fstools                |
 
 Use `Suite` for Implementation and Adapter types. Use `WrapperSuite` for Wrapper types.
